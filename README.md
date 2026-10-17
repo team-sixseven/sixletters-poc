@@ -23,3 +23,13 @@ uv run --project Global poc demo
 ```
 
 준비 파일의 정답·대상·변수 기준은 기업과 확정한 뒤 사용한다.
+
+## 개인 실험
+
+```sh
+uv run --project Global poc init --owner alex --data Global/data/prepared/demo-v1
+uv run --project Global poc new exp001
+uv run --project Global poc exec exp001 train.py
+```
+
+`Members/alex/experiments/exp001/`의 코드·설정을 수정한다. 추가 패키지가 없으면 공통 환경을 사용한다. `uv run --project Global poc env add exp001 xgboost`로 필요한 패키지만 개인 환경에 추가한다. `uv run --project Global poc env isolate exp001`은 해당 실험만 분리한다. `Experiment.save()`는 평가와 결과 파일을 `Global/artifacts/`에 저장한다.
