@@ -581,6 +581,16 @@ def show_run_catalog(entries: list[dict]) -> None:
             for key in ("dataset_version", "feature_set", "model")
         )
         print(f"{index}. {identity} | {context} | {data_type}")
+        archived = {
+            "complete": "완료",
+            "pending": "전송 대기",
+            "none": "미선택",
+            "legacy": "이전 형식 전체 파일·별도 확인 필요",
+        }.get(entry.get("archive_status"), "확인되지 않음")
+        provenance = (
+            " (로컬 전송 기록 기준)" if entry.get("archive_status_source") == "local_record" else ""
+        )
+        print(f"   모델 보관: {archived}{provenance}")
         metrics = entry.get("metrics")
         metrics = metrics if isinstance(metrics, dict) else {}
         print(
@@ -618,3 +628,43 @@ def show_run_catalog(entries: list[dict]) -> None:
             print(f"   위치: {display_text(entry['path'], 240)}")
         elif entry.get("run_id"):
             print(f"   서버 실행 ID: {display_text(entry['run_id'], 80)}")
+
+
+def show_sync_summary(summary: dict) -> None:
+    """Render structured, sanitized issues supplied by tracking; never show exceptions."""
+    labels = (
+        ("uploaded", "전송 완료"),
+        ("already_synced", "기존 전송 완료"),
+        ("pending", "재전송 대기"),
+        ("invalid", "확인 필요"),
+    )
+    print(" | ".join(f"{label}: {summary.get(key, 0)}" for key, label in labels))
+    for issue in summary.get("issues", []):
+        if issue.get("scope") == "scan":
+            path = display_text(issue.get("path", "."), 240)
+            print(f"- 탐색 실패: {path} [{display_text(issue.get('code', 'unknown'), 40)}]")
+            print("  해당 경로의 실행 결과를 모두 확인하지 못했습니다.")
+        else:
+            identity = " / ".join(
+                display_text(issue.get(key, "확인 불가"), 80)
+                for key in ("owner", "experiment", "run_id")
+            )
+            print(f"- {identity} [{display_text(issue.get('code', 'unknown'), 40)}]")
+        print(f"  원인: {display_text(issue.get('message', '확인 불가'), 240)}")
+        print(
+            f"  조치: {display_text(issue.get('action', 'uv run --project Global poc sync로 다시 확인하세요.'), 240)}"
+        )
+
+
+def show_remote_issues(issues: list[dict]) -> None:
+    """Explain quarantined remote results without exposing server exceptions."""
+    for issue in issues:
+        identity = " / ".join(
+            display_text(issue.get(key, "확인 불가"), 80)
+            for key in ("owner", "experiment", "run_id")
+        )
+        print(f"- 비교 제외: {identity} [{display_text(issue.get('code', 'unknown'), 40)}]")
+        for remote_id in issue.get("remote_run_ids", []):
+            print(f"  MLflow 실행 ID: {display_text(remote_id, 80)}")
+        print(f"  원인: {display_text(issue.get('message', '확인 불가'), 240)}")
+        print(f"  조치: {display_text(issue.get('action', '서버 관리자에게 확인하세요.'), 240)}")

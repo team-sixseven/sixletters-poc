@@ -132,3 +132,141 @@ def init_experiment(
         shutil.rmtree(destination)
         raise
     return destination / "config.toml"
+
+
+def _clone_files(source: Path) -> dict[str, bytes]:
+    """Reuse recorded source/settings rules; copy notes without generated notebook output."""
+    from .personal_env import LOCK_NAMES, SCOPE_FILE
+    from .provenance import (
+        _SENSITIVE_RESOURCE_NAME,
+        MAX_RESOURCE_BYTES,
+        MAX_TOTAL_RESOURCE_BYTES,
+        _check_unique_paths,
+        _checked_snapshot_path,
+        _snapshot_files,
+        experiment_resources,
+        python_sources,
+    )
+
+    excluded = {"data", "artifacts", "outputs", "output", "results", "reports", "checkpoints"}
+    files = {
+        name: raw
+        for name, raw in python_sources(source).items()
+        if not any(part.casefold() in excluded for part in Path(name).parts[:-1])
+    }
+    files.update(experiment_resources(source, exclude={*LOCK_NAMES, SCOPE_FILE}))
+    for directory, path in _snapshot_files(source, resources=True):
+        if (
+            path.suffix.lower() not in {".md", ".ipynb"}
+            or _SENSITIVE_RESOURCE_NAME.search(path.name) is not None
+        ):
+            continue
+        name = _checked_snapshot_path(directory, path)
+        if path.stat().st_size > MAX_TOTAL_RESOURCE_BYTES:
+            raise ValueError(f"Clone note exceeds 8 MiB; clear its outputs first: {name}")
+        raw = path.read_bytes()
+        if path.suffix.lower() == ".ipynb":
+            notebook = json.loads(raw)
+            if (
+                not isinstance(notebook, dict)
+                or not isinstance(notebook.get("cells"), list)
+                or not isinstance(notebook.get("metadata", {}), dict)
+            ):
+                raise ValueError(f"Invalid notebook: {name}")
+            metadata = notebook.get("metadata", {})
+            metadata.pop("widgets", None)
+            metadata.pop("kernelspec", None)
+            for cell in notebook["cells"]:
+                if not isinstance(cell, dict) or not isinstance(cell.get("metadata", {}), dict):
+                    raise ValueError(f"Invalid notebook cell: {name}")
+                if cell.get("cell_type") == "code":
+                    cell["outputs"] = []
+                    cell["execution_count"] = None
+                    cell.get("metadata", {}).pop("execution", None)
+            raw = (json.dumps(notebook, ensure_ascii=False, indent=1) + "\n").encode()
+        else:
+            raw.decode("utf-8")
+        if len(raw) > MAX_RESOURCE_BYTES:
+            raise ValueError(f"Clone note exceeds 1 MiB: {name}")
+        files[name] = raw
+    config = source / "config.toml"
+    _checked_snapshot_path(source, config)
+    if config.stat().st_size > MAX_RESOURCE_BYTES:
+        raise ValueError("config.toml exceeds 1 MiB")
+    files["config.toml"] = config.read_bytes()
+    _check_unique_paths(files)
+    return files
+
+
+def clone_experiment(
+    source: Path,
+    owner: str,
+    name: str,
+    *,
+    root: Path = Path("Members"),
+) -> Path:
+    """Copy editable experiment inputs without copying models, data or virtual environments."""
+    from .personal_env import (
+        SCOPE_FILE,
+        _directory,
+        _locked,
+        environment_directory,
+        environment_resources,
+    )
+    from .provenance import _check_unique_paths
+    from .reproduction import _restored_config
+
+    owner = validate_component(owner, "owner")
+    name = validate_component(name, "name")
+    source = _directory(source)
+    validate_experiment_identity(source / "config.toml")
+    original_identity = tomllib.loads((source / "config.toml").read_text())["experiment"]
+    root = Path(root).absolute()
+    if any(path.is_symlink() for path in (root, *root.parents)):
+        raise ValueError("Clone destination must not contain symbolic links")
+    root.mkdir(parents=True, exist_ok=True)
+    _reject_ambiguous_name(root, owner)
+    member = root / owner
+    if member.is_symlink():
+        raise ValueError("Owner folder must not be a symbolic link")
+    member.mkdir(exist_ok=True)
+    target_parent = member / "experiments"
+    if target_parent.is_symlink():
+        raise ValueError("Experiment folder must not be a symbolic link")
+    target_parent.mkdir(exist_ok=True)
+    _reject_ambiguous_name(target_parent, name)
+    destination = target_parent / name
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(f"Experiment already exists: {destination}")
+
+    active = environment_directory(source)
+    with _locked(active):
+        files = _clone_files(source)
+        if active == member.resolve():
+            # Preserve shared selection without copying inactive local package records.
+            files[SCOPE_FILE] = b'scope = "shared"\n'
+        else:
+            # An isolated source or another member must not change the recipient's packages.
+            files.update(environment_resources(source))
+            files[SCOPE_FILE] = b'scope = "isolated"\n'
+        for filename, raw in list(files.items()):
+            if Path(filename).suffix != ".toml" or filename == SCOPE_FILE:
+                continue
+            value = tomllib.loads(raw.decode("utf-8"))
+            identity = value.get("experiment")
+            if isinstance(identity, dict) and all(
+                identity.get(key) == original_identity.get(key) for key in ("owner", "name")
+            ):
+                files[filename] = _restored_config(raw, owner=owner, name=name)
+        _check_unique_paths(files)
+        destination.mkdir()
+        try:
+            for filename, raw in files.items():
+                target = destination / filename
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(raw)
+            validate_experiment_identity(destination / "config.toml")
+        except BaseException:
+            shutil.rmtree(destination)
+            raise
+    return destination / "config.toml"

@@ -42,3 +42,17 @@ uv run --project Global poc compare
 ```
 
 같은 데이터·분할·평가 기준의 실행을 선택한다. 목록에서 환자·SCD 수, 점수, 신뢰구간을 함께 본다. 기준 실행을 지정하면 점수 차이의 신뢰구간도 비교한다.
+
+## 결과 공유와 모델 보관
+
+서버 연결 변수 `MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_USERNAME`, `MLFLOW_TRACKING_PASSWORD`를 실행 환경에 설정한다. 기본 실험 이름은 `sixseven-poc`이다.
+
+```sh
+uv run --project Global poc sync
+uv run --project Global poc compare --remote
+uv run --project Global poc archive
+uv run --project Global poc restore restored001 --remote
+uv run --project Global poc new exp002 --from exp001
+```
+
+저장은 서버 응답을 기다리지 않는다. `sync`는 점수·설정·예측 결과를 전송하고 실패 원인을 표시한다. 선택한 실행의 모델·재현 파일은 `archive`로 추가 업로드한다.

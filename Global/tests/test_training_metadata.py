@@ -6,9 +6,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from sixletters.comparison import compare_runs
 from sixletters.data.demo import make_demo_dataset
 from sixletters.data.prepared import save_prepared_dataset
 from sixletters.experiment import Experiment, _load_config, validate_training
+from sixletters.tracking import _full_manifest, _local_manifest
 from sixletters.workspace import init_experiment
 
 TAG = "__sixletters_float__"
@@ -123,6 +125,42 @@ def test_config_toml_remains_finite_only(tmp_path, value):
     )
     with pytest.raises(ValueError, match="finite JSON-compatible"):
         _load_config(config)
+
+
+def test_xgboost_like_params_save_verify_and_compare_without_mutation(tmp_path):
+    data = save_prepared_dataset(make_demo_dataset(), tmp_path / "data", synthetic=True)
+    model = tmp_path / "export.json"
+    model.write_text('{"model": "opaque example"}')
+    parameters = {
+        "missing": np.nan,
+        "max_depth": np.int32(6),
+        "n_jobs": None,
+        "objective": "binary:logistic",
+        "eval_metric": ["auc", "aucpr"],
+        "learning_rate": np.float64(0.1),
+    }
+    runs = []
+    for owner in ("Alice", "Bob"):
+        config = init_experiment(owner, "example", root=tmp_path / "Members")
+        experiment = Experiment(data, config, output_root=tmp_path / "artifacts")
+        scores = pd.DataFrame({"patient_id": experiment.validation_data().index, "score": 0.5})
+        run = experiment.save(
+            scores, model_files={"export.json": model}, training=metadata(parameters)
+        )
+        # Strict JSON loads the tagged value without accepting the nonstandard NaN token.
+        saved = json.loads(
+            (run / "result.json").read_text(),
+            parse_constant=lambda value: pytest.fail(f"Nonstandard JSON token: {value}"),
+        )
+        assert saved["training"]["parameters"]["missing"] == {TAG: "nan"}
+        assert _local_manifest(run)[0] == saved
+        assert _full_manifest(run)[0] == saved
+        runs.append(run)
+    frame = compare_runs(runs, tmp_path / "comparison.csv")
+    assert len(frame) == 2
+    assert json.loads(frame.iloc[0]["parameters"])["missing"] == {TAG: "nan"}
+    assert math.isnan(parameters["missing"])
+    assert isinstance(parameters["max_depth"], np.integer)
 
 
 def test_normalized_settings_do_not_allow_nonfinite_prediction_scores(tmp_path):

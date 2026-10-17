@@ -9,7 +9,12 @@ from sixletters import experiment as experiment_module
 from sixletters.data.demo import make_demo_dataset
 from sixletters.data.prepared import save_prepared_dataset
 from sixletters.experiment import Experiment
-from sixletters.provenance import OPERATIONAL_SOURCE_PATHS, shared_code_scope, source_hash
+from sixletters.provenance import (
+    OPERATIONAL_SOURCE_PATHS,
+    python_sources,
+    shared_code_scope,
+    source_hash,
+)
 from sixletters.workspace import init_experiment
 
 
@@ -74,6 +79,41 @@ def test_legacy_config_save_records_source_config_environment_and_arbitrary_mode
     ).read_bytes()
     assert (run / "shared_source/evaluation.py").is_file()
     assert (run / "models/model.onnx").read_bytes() == model.read_bytes()
+
+
+@pytest.mark.parametrize("version", [1, 2, 3])
+def test_previous_scope_archive_verifies_its_full_snapshot_without_reinterpreting_it(
+    pending_run, version
+):
+    from sixletters.tracking import BundleError, _full_manifest
+
+    experiment, predictions, _, _, model = pending_run
+    run = experiment.save(predictions, model_files={"model.onnx": model})
+    result = json.loads((run / "result.json").read_text(encoding="utf-8"))
+    result["shared_code_scope"] = shared_code_scope(
+        python_sources(run / "shared_source"), version=version
+    )
+    expected = [
+        "__main__.py",
+        "local_settings.py",
+        "run_catalog.py",
+        "tracking.py",
+        "tracking_diagnostics.py",
+        "workspace.py",
+    ]
+    if version >= 2:
+        expected += ["personal_env.py"]
+    if version >= 3:
+        expected += ["execution.py", "reproduction.py", "final_evaluation.py", "final_metrics.py"]
+    assert result["shared_code_scope"]["excluded"] == expected
+    (run / "result.json").write_text(json.dumps(result), encoding="utf-8")
+    verified, manifest = _full_manifest(run)
+    assert verified["shared_code_scope"] == result["shared_code_scope"]
+    assert "shared_source/personal_env.py" in manifest["files"]
+    # Even an operational snapshot remains immutable in an already saved bundle.
+    (run / "shared_source/personal_env.py").write_text("# replaced after saving\n")
+    with pytest.raises(BundleError, match="incomplete or modified"):
+        _full_manifest(run)
 
 
 @pytest.mark.parametrize("name", OPERATIONAL_SOURCE_PATHS)

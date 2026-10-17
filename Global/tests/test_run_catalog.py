@@ -3,11 +3,13 @@
 import copy
 import json
 import os
+import sys
 from datetime import UTC, datetime
 
 import pytest
 
 from sixletters import __main__ as cli
+from sixletters import tracking
 from sixletters.run_catalog import display_text, show_run_catalog
 
 
@@ -30,6 +32,24 @@ def entry(index=1, **changes):
         "created_at_source": "tracking_start",
         **changes,
     }
+
+
+def test_remote_selection_shows_actual_scores_and_setting_differences_without_reordering(
+    monkeypatch, capsys
+):
+    first = entry(parameters={"C": 0.1, "max_iter": 200})
+    second = entry(2, seed=17)
+    monkeypatch.setattr("builtins.input", lambda _: "2 1")
+    assert cli.choose_remote_runs([first, second]) == ["remote-2", "remote-1"]
+    output = capsys.readouterr().out
+    assert output.index("1. 팀원 / exp001 / local-1") < output.index("2. 팀원 / exp001 / local-2")
+    assert "AUROC=0.8123 | AP=0.4322 | Brier=0.1235" in output
+    assert "parameters/max_iter=200" in output.split("1. 팀원")[0]
+    first_display, second_display = output.split("1. 팀원")[1].split("2. 팀원")
+    assert "parameters/C=0.1" in first_display and "seed=42" in first_display
+    assert "parameters/C=1.0" in second_display and "seed=17" in second_display
+    assert "2026-10-17 00:00:00 UTC (서버 등록)" in output
+    assert "실제 비교 시 예측 파일을 다시 검증" in output
 
 
 def test_nested_settings_distinguish_missing_null_and_changed_values(capsys):
@@ -133,6 +153,31 @@ def test_local_selection_labels_legacy_file_time_and_keeps_number_mapping(
     assert "seed=null" in output
 
 
+def test_local_saved_timestamp_takes_precedence_over_file_mtime(tmp_path, monkeypatch, capsys):
+    directory = tmp_path / "member" / "exp" / "run"
+    directory.mkdir(parents=True)
+    (directory / "predictions.csv").touch()
+    (directory / "result.json").write_text(
+        json.dumps(
+            {
+                "owner": "member",
+                "experiment": "exp",
+                "run_id": "run",
+                "feature_set": "clinical",
+                "synthetic": False,
+                "comparison_context": {"dataset": {"dataset_id": "cohort-v1"}},
+                "training": {"model": "own", "seed": 42, "parameters": {}},
+                "created_at": "2026-01-01T12:00:00Z",
+            }
+        )
+    )
+    monkeypatch.setattr("builtins.input", lambda _: "1")
+    assert cli.choose_runs(tmp_path, archive=True) == [directory]
+    output = capsys.readouterr().out
+    assert "2026-01-01 12:00:00 UTC (결과 저장)" in output
+    assert "파일 수정" not in output
+
+
 def test_catalog_bounds_metadata_and_removes_terminal_controls(capsys):
     first = entry(owner="team\x1b[2J\nforged\r\u202e", parameters={"payload": "x" * 10000})
     original = copy.deepcopy(first)
@@ -144,6 +189,53 @@ def test_catalog_bounds_metadata_and_removes_terminal_controls(capsys):
     assert len(output) < 1400
     assert first == original
     assert display_text("a\n" * 300, 12) == "a a a a a a…"
+
+
+def test_sync_cli_explains_each_failed_run_and_ignores_unstructured_exception(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(sys, "argv", ["poc", "sync"])
+    monkeypatch.setattr(
+        tracking,
+        "sync_runs",
+        lambda root: {
+            "uploaded": 2,
+            "already_synced": 1,
+            "pending": 1,
+            "invalid": 1,
+            "raw_error": "password=SECRET",
+            "issues": [
+                {
+                    "owner": "민정",
+                    "experiment": "exp001",
+                    "run_id": "one",
+                    "status": "pending",
+                    "code": "auth",
+                    "message": "로그인에 실패했습니다.",
+                    "action": "계정 설정을 확인하세요.",
+                    "raw_error": "password=SECRET",
+                },
+                {
+                    "owner": "성률",
+                    "experiment": "exp002",
+                    "run_id": "two",
+                    "status": "invalid",
+                    "code": "bundle_changed",
+                    "message": "저장된 결과가 변경됐습니다.",
+                    "action": "원본 파일을 복구하세요.",
+                },
+            ],
+        },
+    )
+    assert cli.main() == 1
+    output = capsys.readouterr().out
+    assert "전송 완료: 2" in output and "재전송 대기: 1" in output and "확인 필요: 1" in output
+    assert "민정 / exp001 / one [auth]" in output
+    assert "원인: 로그인에 실패했습니다." in output
+    assert "조치: 계정 설정을 확인하세요." in output
+    assert "성률 / exp002 / two [bundle_changed]" in output
+    assert "SECRET" not in output and "raw_error" not in output
 
 
 @pytest.mark.parametrize(
