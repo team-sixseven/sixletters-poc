@@ -1282,7 +1282,7 @@ def test_long_endpoint_definition_still_uploads_without_changing_original(
     root, client, make_run, enable = setup_tracking
     run = make_run()
     result_file = run / "result.json"
-    result = json.loads(result_file.read_text())
+    result = json.loads(result_file.read_text(encoding="utf-8"))
     definition = "Custom outcome definition " * 400
     result["comparison_context"]["dataset"]["target_definition"] = definition
     result_file.write_text(json.dumps(result))

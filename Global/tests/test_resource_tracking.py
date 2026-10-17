@@ -50,7 +50,9 @@ def test_basic_sync_omits_resources_selected_archive_keeps_exact_bytes(tmp_path,
     assert "source/train.py" not in manifest["files"]
     tracking.archive_run(run)
     remote_id = next(iter(client.runs))
-    assert (client.root / remote_id / "reproduction" / resource).read_bytes() == b"depth: 3\n"
+    assert (client.root / remote_id / "reproduction" / resource).read_bytes() == (
+        run / resource
+    ).read_bytes()
 
 
 @pytest.mark.parametrize("corruption", ["modify", "delete", "extra"])
@@ -112,7 +114,7 @@ def test_archive_preserves_legacy_source_files_in_recorded_hash(
     saved.parent.mkdir(parents=True, exist_ok=True)
     saved.write_bytes(b"# Included by the original schema-3 source collector\n")
     result_path = run / "result.json"
-    result = json.loads(result_path.read_text())
+    result = json.loads(result_path.read_text(encoding="utf-8"))
     result.pop("resources")
     resources = run / "resources"
     if resources.exists():

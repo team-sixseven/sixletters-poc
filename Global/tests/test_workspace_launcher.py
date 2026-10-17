@@ -67,6 +67,7 @@ pytestmark = pytest.mark.skipif(os.name == "nt", reason="The host launcher runs 
                 "--offline",
             ],
         ),
+        (["lint", "--staged"], ["exec", "-T", "gpu", "poc-container", "pre-commit", "run"]),
         (
             ["test"],
             ["exec", "-T", "gpu", "poc-container", "pytest", "-c", "Global/pyproject.toml", "-q"],

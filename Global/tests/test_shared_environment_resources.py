@@ -140,7 +140,7 @@ def test_restore_shared_package_snapshot_isolates_without_touching_destination_o
     root, config, data, _ = workspace
     expected = package_files(config.parent.parent.parent)
     if marker:
-        (config.parent / "environment.toml").write_text(f'scope = "{marker}"\n')
+        (config.parent / "environment.toml").write_bytes(f'scope = "{marker}"\n'.encode())
     run = save(workspace)
     original_result = (run / "result.json").read_bytes()
     destination_owner = root / "Members/Bob"
@@ -185,7 +185,7 @@ def test_equivalent_runtime_may_use_managed_lock_without_matching_venv_path(work
     baseline = personal_env._baseline()
     lock = "".join(f"{name}=={version}\n" for name, version in baseline["packages"].items())
     (owner / "requirements.in").write_text("")
-    (owner / "requirements.lock").write_text(lock)
+    (owner / "requirements.lock").write_bytes(lock.encode("utf-8"))
     (owner / "environment.json").write_text(json.dumps(personal_env._manifest("", lock, baseline)))
     assert not (owner / ".venv").exists()
     run = save(workspace)

@@ -106,12 +106,12 @@ def test_registered_kernels_execute_personal_packages_and_hold_environment_lock(
     for index, path in enumerate(experiments):
         display, location = pe.env_kernel(path)
         names.append(location.parent.name)
-        spec = json.loads(location.read_text())
+        spec = json.loads(location.read_text(encoding="utf-8"))
         assert display == f"SixSeven · 팀원 가 / {path.name}"
         assert spec["argv"][0] == str(pe._python(path / pe.ENV_DIR))
         assert spec["env"] == {"PYTHONPATH": str(root / "Global/src")}
-        assert "must-not-be-persisted" not in location.read_text()
-        assert "old_training" not in location.read_text()
+        assert "must-not-be-persisted" not in location.read_text(encoding="utf-8")
+        assert "old_training" not in location.read_text(encoding="utf-8")
         # A fresh manager discovers the persistent registry, including after recreation.
         registry = KernelSpecManager(kernel_dirs=[str(pe.jupyter_data_path(root) / "kernels")])
         manager = KernelManager(kernel_name=location.parent.name, kernel_spec_manager=registry)
@@ -194,7 +194,7 @@ def test_shared_member_kernels_run_concurrently_with_distinct_helpers(kernels):
     try:
         for index, path in enumerate(experiments):
             _, location = pe.env_kernel(path)
-            spec = json.loads(location.read_text())
+            spec = json.loads(location.read_text(encoding="utf-8"))
             assert spec["argv"][0] == str(pe._python(owner / pe.ENV_DIR))
             registry = KernelSpecManager(kernel_dirs=[str(pe.jupyter_data_path(root) / "kernels")])
             manager = KernelManager(kernel_name=location.parent.name, kernel_spec_manager=registry)

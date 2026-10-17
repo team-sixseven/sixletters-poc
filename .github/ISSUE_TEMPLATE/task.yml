@@ -1,0 +1,21 @@
+name: 작업
+description: 구현·분석·실험할 작업
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: 해야 할 일
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: 완료 기준
+      description: 어떤 결과를 확인하면 완료인지 적어주세요. 개인 실험은 비교할 방법과 입력 그룹을 적어주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: 변경할 파일
+      description: 개인 실험 폴더와 수정이 필요한 공통 파일을 구분해 적어주세요.

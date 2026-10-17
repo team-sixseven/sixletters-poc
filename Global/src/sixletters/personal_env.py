@@ -859,7 +859,7 @@ def _publish(path: Path, staged: Path, contents: dict[str, str]) -> None:
         (staged / ENV_DIR).rename(target)
         for name, content in contents.items():
             temporary = staged / name
-            temporary.write_text(content, encoding="utf-8")
+            temporary.write_bytes(content.encode("utf-8"))
             temporary.replace(path / name)
     except BaseException:
         if target.exists():
