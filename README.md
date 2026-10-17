@@ -14,3 +14,12 @@ uv run --project Global poc --help
 ## 파일 관리
 
 공통 코드는 `Global/`, 개인 코드는 `Members/<영문 소문자 ID>/`에 둔다. 원본 데이터·환자 ID·모델·비밀키·노트북 출력은 Git에 올리지 않는다.
+## 공통 데이터
+
+```sh
+uv run --project Global poc music
+# 실행 점검용 합성 데이터
+uv run --project Global poc demo
+```
+
+준비 파일의 정답·대상·변수 기준은 기업과 확정한 뒤 사용한다.
