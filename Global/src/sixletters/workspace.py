@@ -128,6 +128,9 @@ def init_experiment(
             )
         (destination / "config.toml").write_text(config, encoding="utf-8")
         shutil.copyfile(template / script_template, destination / script)
+        if (template / "predict.py").is_file():
+            predictor = "final_eval.py" if script.casefold() == "predict.py" else "predict.py"
+            shutil.copyfile(template / "predict.py", destination / predictor)
     except BaseException:
         shutil.rmtree(destination)
         raise

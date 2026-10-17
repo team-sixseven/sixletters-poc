@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import shutil
 import tempfile
 import tomllib
@@ -405,3 +406,237 @@ def fetch_archive(cache_root: Path, remote_run_id: str) -> Path:
         raise tracking.TrackingError(
             "모델·재현 파일을 내려받지 못했습니다. 서버 연결·권한을 확인한 뒤 다시 시도하세요."
         ) from error
+
+
+def _status_path(path: Path, root: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _prediction_steps(
+    directory: Path, run_id: str, candidate: dict, root: Path, data: Path
+) -> tuple[str, list[str]]:
+    """Suggest reviewed commands; never execute code or guess a custom model loader."""
+    from .local_settings import read_settings
+    from .personal_env import LOCK_NAMES, environment_resources
+
+    owner = validate_component(candidate["owner"], "owner")
+    name = validate_component(candidate["experiment"], "experiment")
+    frozen = _no_symlinks(directory / candidate["directory"])
+    standard = Path(__file__).resolve().parents[2] / "templates/experiment/predict.py"
+    predictor = frozen / "source/predict.py"
+    template_matches = (
+        standard.is_file()
+        and predictor.is_file()
+        and predictor.read_bytes() == standard.read_bytes()
+        and (frozen / "models/model.pkl").is_file()
+    )
+    local = root / "Members" / owner / "experiments" / name
+    local_matches = False
+    if template_matches:
+        try:
+            _no_symlinks(local / "predict.py")
+            _, settings, _ = _load_config(_no_symlinks(local / "config.toml"))
+            expected = {
+                name: (frozen / "resources" / name).read_bytes()
+                for name in LOCK_NAMES
+                if (frozen / "resources" / name).is_file()
+            }
+            local_matches = (
+                settings["owner"] == owner
+                and settings["name"] == name
+                and (local / "predict.py").read_bytes() == predictor.read_bytes()
+                and environment_resources(local) == expected
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    plan_path = _status_path(directory, root)
+    data_path = _status_path(data, root)
+    if local_matches:
+        return (
+            "보관된 표준 예측 코드·패키지 기록과 일치합니다. 모델을 검토한 뒤 예측만 실행하세요.",
+            [
+                shlex.join(
+                    [
+                        "uv",
+                        "run",
+                        "--project",
+                        "Global",
+                        "poc",
+                        "exec",
+                        "--owner",
+                        owner,
+                        name,
+                        "predict.py",
+                        "--plan",
+                        plan_path,
+                        "--run-id",
+                        run_id,
+                        "--data",
+                        data_path,
+                    ]
+                )
+            ],
+        )
+    try:
+        target_owner = read_settings(root).get("owner") or owner
+    except (OSError, ValueError):
+        target_owner = owner
+    target_owner = validate_component(target_owner, "owner")
+    restored_name = f"final-{run_id[:12]}"
+    suffix = 1
+    while (root / "Members" / target_owner / "experiments" / restored_name).exists() or (
+        root / "Members" / target_owner / "experiments" / restored_name
+    ).is_symlink():
+        restored_name = f"final-{run_id[:12]}-{suffix}"
+        suffix += 1
+    commands = [
+        shlex.join(
+            [
+                "uv",
+                "run",
+                "--project",
+                "Global",
+                "poc",
+                "restore",
+                restored_name,
+                "--owner",
+                target_owner,
+                "--run",
+                _status_path(frozen, root),
+                "--data",
+                data_path,
+            ]
+        ),
+        shlex.join(
+            [
+                "uv",
+                "run",
+                "--project",
+                "Global",
+                "poc",
+                "env",
+                "sync",
+                restored_name,
+                "--owner",
+                target_owner,
+            ]
+        ),
+    ]
+    if template_matches:
+        commands.append(
+            shlex.join(
+                [
+                    "uv",
+                    "run",
+                    "--project",
+                    "Global",
+                    "poc",
+                    "exec",
+                    "--owner",
+                    target_owner,
+                    restored_name,
+                    "predict.py",
+                    "--plan",
+                    plan_path,
+                    "--run-id",
+                    run_id,
+                    "--data",
+                    data_path,
+                ]
+            )
+        )
+        return (
+            "현재 개인 코드·패키지 기록을 그대로 사용할 수 없어 고정한 원본을 새 실험에 복원하는 명령입니다. 모델 검토 후 순서대로 실행하세요.",
+            commands,
+        )
+    return (
+        "원본을 복원한 뒤 모델 형식에 맞는 예측 코드를 검토하세요. 사용자 정의 코드는 실행 명령을 추측하지 않습니다. 재학습하지 마세요.",
+        commands,
+    )
+
+
+def final_plan_status(plan_directory: Path, data: Path, root: Path) -> dict:
+    """Inspect every frozen candidate and show progress without computing test metrics."""
+    from .final_evaluation import FinalEvaluation, _data, _plan, _read_json, _replay_tolerance
+
+    directory, root, data = (_no_symlinks(Path(path)) for path in (plan_directory, root, data))
+    plan = _plan(directory)
+    dataset, synthetic = _data(data)
+    if dataset.fingerprint() != plan["dataset"] or synthetic != plan["synthetic"]:
+        raise ValueError("최종 평가 계획과 같은 데이터·환자 분할을 지정하세요.")
+    candidates = []
+    counts = {"complete": 0, "missing": 0, "invalid": 0}
+    report = _no_symlinks(directory / "report")
+    for run_id, candidate in plan["candidates"].items():
+        item = {key: candidate[key] for key in ("owner", "experiment")}
+        item.update(
+            run_id=run_id,
+            status="invalid",
+            commands=[],
+            message="고정한 원본 또는 예측 기록을 확인하세요. 기존 파일을 덮어쓰지 마세요.",
+        )
+        try:
+            if not isinstance(run_id, str) or not _UUID.fullmatch(run_id):
+                raise ValueError("Invalid candidate identity")
+            FinalEvaluation(directory, run_id, data)
+            stored = _no_symlinks(directory / "predictions" / run_id)
+            if not stored.exists():
+                if report.exists():
+                    raise ValueError("Report exists without all candidate predictions")
+                item["status"] = "missing"
+                item["message"], item["commands"] = _prediction_steps(
+                    directory, run_id, candidate, root, data
+                )
+            else:
+                receipt = _read_json(_no_symlinks(stored / "receipt.json"))
+                predictions = _no_symlinks(stored / "predictions.csv")
+                if (
+                    receipt.get("plan_hash") != plan["plan_hash"]
+                    or receipt.get("run_id") != run_id
+                    or receipt.get("predictions_sha256") != file_hash(predictions)
+                    or receipt.get("validation_replay") != "matched"
+                    or (
+                        plan["schema_version"] >= 2
+                        and receipt.get("validation_replay_tolerance") != _replay_tolerance(plan)
+                    )
+                ):
+                    raise ValueError("Saved prediction receipt differs")
+                item.update(
+                    status="complete",
+                    message="검증 재현과 예측 파일의 완료 기록·해시가 일치합니다. 다시 예측하지 않습니다.",
+                )
+        except (OSError, ValueError, KeyError, TypeError):
+            item.update(status="invalid", commands=[])
+        counts[item["status"]] += 1
+        candidates.append(item)
+    commands = []
+    if candidates and counts["complete"] == len(candidates) and not report.exists():
+        commands.append(
+            shlex.join(
+                [
+                    "uv",
+                    "run",
+                    "--project",
+                    "Global",
+                    "poc",
+                    "final",
+                    "report",
+                    directory.name,
+                    "--data",
+                    _status_path(data, root),
+                ]
+            )
+        )
+    if _plan(directory) != plan:
+        raise ValueError("상태를 확인하는 중 최종 평가 계획이 변경되었습니다.")
+    return {
+        "name": directory.name,
+        "plan": str(directory),
+        "candidates": candidates,
+        "counts": counts,
+        "report": str(report) if report.exists() else None,
+        "next_commands": commands,
+    }

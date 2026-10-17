@@ -62,6 +62,22 @@ def snapshot(directory):
     }
 
 
+def test_shared_environment_snapshot_overrides_inactive_local_files_without_member_walk(workspace):
+    _, config, _, _ = workspace
+    owner = config.parent.parent.parent
+    expected = package_files(owner)
+    package_files(config.parent, version="9.0.0")
+    (config.parent / "environment.toml").write_text('scope = "shared"\n')
+    (owner / "unrelated.json").write_text('{"not": "an experiment resource"}')
+    other = init_experiment("Alice", "other", root=owner.parent)
+    (other.parent / "private.py").write_text("SHOULD_NOT_BE_CAPTURED = True\n")
+    run = save(workspace)
+    assert snapshot(run / "resources") == expected
+    resources = json.loads((run / "result.json").read_text())["resources"]
+    assert set(resources) == set(expected) | {"environment.toml"}
+    assert {path.name for path in (run / "source").iterdir()} == {"train.py", "predict.py"}
+
+
 @pytest.mark.parametrize("change", ["modify", "remove", "add"])
 def test_shared_environment_change_during_training_blocks_save(workspace, change):
     root, config, _, _ = workspace
