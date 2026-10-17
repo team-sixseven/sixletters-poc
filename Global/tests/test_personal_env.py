@@ -704,7 +704,7 @@ def test_status_reports_missing_ready_stale_and_changed_installed_packages(isola
     assert missing["state"] == "install-needed"
     assert missing["scope"] == "shared"
     assert missing["path"] == owner
-    assert missing["next_command"].startswith("./poc env sync shared")
+    assert missing["next_command"].startswith("./dev env sync shared")
     assert missing["active"] == []
     python = pe.env_add(path, ["poc-env-extra==1.0"])
     assert pe.env_status(path)["state"] == "ready"
@@ -762,7 +762,7 @@ def test_status_returns_promptly_while_an_environment_update_holds_gate(isolated
         status = pe.env_status(path)
     assert status["state"] == "update-needed"
     assert "완료될 때까지" in status["reason"]
-    assert status["next_command"].startswith("./poc env status shared")
+    assert status["next_command"].startswith("./dev env status shared")
 
 
 def test_registering_existing_ready_kernel_is_a_read_only_noop_while_running(isolated):

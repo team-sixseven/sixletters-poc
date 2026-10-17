@@ -573,7 +573,7 @@ def main() -> int:
                     raise ValueError("A baseline experiment already exists; use a new prefix")
             for name, model, group in specifications:
                 init_experiment(owner, name, feature_set=group, model=model, root=root / "Members")
-                command = ["./poc", "exec", name]
+                command = ["./dev", "exec", name]
                 if args.owner:
                     command.extend(["--owner", owner])
                 command.append("train.py")

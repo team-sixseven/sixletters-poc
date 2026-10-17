@@ -4,4 +4,4 @@ cd "$(git rev-parse --show-toplevel)"
 if [ -f /opt/poc/dependencies.sha256 ] && [ -x /usr/local/bin/poc-container ]; then
     exec /usr/local/bin/poc-container pre-commit run
 fi
-POC_NO_TTY=1 exec ./poc lint --staged
+POC_NO_TTY=1 exec ./dev lint --staged

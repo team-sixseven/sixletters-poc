@@ -93,7 +93,7 @@ pytestmark = pytest.mark.skipif(os.name == "nt", reason="The host launcher runs 
 def test_tools_select_running_gpu_service(tmp_path, arguments, expected):
     root = tmp_path / "checkout"
     root.mkdir()
-    shutil.copyfile(Path(__file__).resolve().parents[2] / "poc", root / "poc")
+    shutil.copyfile(Path(__file__).resolve().parents[2] / "dev", root / "dev")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     docker = bin_dir / "docker"
@@ -110,7 +110,7 @@ def test_tools_select_running_gpu_service(tmp_path, arguments, expected):
     docker.chmod(0o755)
     log = tmp_path / "calls.jsonl"
     completed = subprocess.run(
-        ["sh", str(root / "poc"), *arguments],
+        ["sh", str(root / "dev"), *arguments],
         cwd=root,
         env={
             **os.environ,
@@ -163,7 +163,7 @@ def test_tools_select_running_gpu_service(tmp_path, arguments, expected):
 def test_tracking_commands_use_only_server_compose(tmp_path, arguments, expected):
     root = tmp_path / "checkout"
     root.mkdir()
-    shutil.copyfile(Path(__file__).resolve().parents[2] / "poc", root / "poc")
+    shutil.copyfile(Path(__file__).resolve().parents[2] / "dev", root / "dev")
     (root / ".env.tracking").write_text("", encoding="utf-8")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -178,7 +178,7 @@ def test_tracking_commands_use_only_server_compose(tmp_path, arguments, expected
     docker.chmod(0o755)
     log = tmp_path / "calls.jsonl"
     completed = subprocess.run(
-        ["sh", str(root / "poc"), "tracking", *arguments],
+        ["sh", str(root / "dev"), "tracking", *arguments],
         env={
             **os.environ,
             "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],

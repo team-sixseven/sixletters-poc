@@ -14,7 +14,7 @@ pytestmark = pytest.mark.skipif(os.name == "nt", reason="The host launcher runs 
 def test_hook_registration_respects_effective_configuration(tmp_path, existing_scope):
     root = tmp_path / "한글 저장소"
     root.mkdir()
-    shutil.copyfile(Path(__file__).resolve().parents[2] / "poc", root / "poc")
+    shutil.copyfile(Path(__file__).resolve().parents[2] / "dev", root / "dev")
     environment = {
         **os.environ,
         "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),
@@ -35,7 +35,7 @@ def test_hook_registration_respects_effective_configuration(tmp_path, existing_s
     if existing_scope:
         git("config", f"--{existing_scope}", "core.hooksPath", "existing-hooks")
     installed = subprocess.run(
-        ["sh", str(root / "poc"), "hooks"],
+        ["sh", str(root / "dev"), "hooks"],
         cwd=root,
         env=environment,
         capture_output=True,

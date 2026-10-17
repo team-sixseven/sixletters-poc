@@ -113,7 +113,7 @@ def test_printed_baseline_commands_execute_the_explicit_owner_with_spaces(
     owner = "Bob O'Neil"
     monkeypatch.setattr(sys, "argv", ["poc", "baselines", "shared trial", "--owner", owner])
     assert cli.main() == 0
-    commands = [line for line in capsys.readouterr().out.splitlines() if line.startswith("./poc ")]
+    commands = [line for line in capsys.readouterr().out.splitlines() if line.startswith("./dev ")]
     executed = []
 
     def execute(directory, script, arguments):

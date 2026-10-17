@@ -162,16 +162,16 @@ def test_compose_up_starts_workspace_trains_and_preserves_results(docker_workspa
     assert environment["synthetic_data_and_ecg"] == "passed"
     assert environment["gpu"] == "not requested"
 
-    run("./poc", "demo", "--output", "Global/data/prepared/demo-v1")
-    run("./poc", "init", "--owner", "팀원 가", "--data", "Global/data/prepared/demo-v1")
+    run("./dev", "demo", "--output", "Global/data/prepared/demo-v1")
+    run("./dev", "init", "--owner", "팀원 가", "--data", "Global/data/prepared/demo-v1")
     owners = ("팀원 가", "팀원 나")
-    run("./poc", "new", "exp001", "--script", "fit_rf.py")
-    run("./poc", "new", "exp001", "--owner", owners[1])
+    run("./dev", "new", "exp001", "--script", "fit_rf.py")
+    run("./dev", "new", "exp001", "--owner", owners[1])
     runs = []
     for owner in owners:
         if owner == owners[0]:
             # Only the additional package is installed; numerical packages stay in /opt/venv.
-            run("./poc", "env", "add", "exp001", "tabulate==0.9.0", timeout=300)
+            run("./dev", "env", "add", "exp001", "tabulate==0.9.0", timeout=300)
             experiment_dir = workspace / "Members" / owner / "experiments" / "exp001"
             (experiment_dir / "package_probe.py").write_text(
                 "import importlib.metadata as m, json, sysconfig, numpy, sklearn, tabulate\n"
@@ -180,16 +180,16 @@ def test_compose_up_starts_workspace_trains_and_preserves_results(docker_workspa
                 "'numpy': numpy.__file__, 'sklearn': sklearn.__file__, "
                 "'tabulate': tabulate.__file__}))\n"
             )
-            packages = json.loads(run("./poc", "exec", "exp001", "package_probe.py"))
+            packages = json.loads(run("./dev", "exec", "exp001", "package_probe.py"))
             assert packages["local"] == ["tabulate"]
             assert packages["numpy"].startswith("/opt/venv/")
             assert packages["sklearn"].startswith("/opt/venv/")
             assert packages["tabulate"].startswith(f"/workspace/Members/{owner}/.venv/")
             (experiment_dir / "preprocessing.yaml").write_text("imputer: median\n")
-            run("./poc", "exec", "exp001", "fit_rf.py", timeout=300)
+            run("./dev", "exec", "exp001", "fit_rf.py", timeout=300)
             assert (workspace / "Members" / owner / ".venv/pyvenv.cfg").is_file()
         else:
-            run("./poc", "exec", "exp001", "--owner", owner, "train.py")
+            run("./dev", "exec", "exp001", "--owner", owner, "train.py")
             member = workspace / "Members" / owner
             assert not any(
                 (member / name).exists()
@@ -225,7 +225,7 @@ def test_compose_up_starts_workspace_trains_and_preserves_results(docker_workspa
     requirements.write_text(original_requirements.replace("==0.9.0", ">=0.9.0"), encoding="utf-8")
     try:
         host_error = run(
-            "./poc",
+            "./dev",
             "exec",
             "exp001",
             "package_probe.py",
@@ -233,25 +233,25 @@ def test_compose_up_starts_workspace_trains_and_preserves_results(docker_workspa
             error_output=True,
         )
         inner_error = run(
-            "./poc",
+            "./dev",
             "shell",
             "-c",
             "poc exec exp001 package_probe.py",
             expected_returncode=2,
             error_output=True,
         )
-        status = run("./poc", "env", "status", "exp001")
-        assert "./poc env sync exp001 --owner '팀원 가' --relock" in host_error
+        status = run("./dev", "env", "status", "exp001")
+        assert "./dev env sync exp001 --owner '팀원 가' --relock" in host_error
         assert "poc env sync exp001 --owner '팀원 가' --relock" in inner_error
-        assert "./poc" not in inner_error
-        assert "./poc env sync exp001 --owner '팀원 가' --relock" in status
+        assert "./dev" not in inner_error
+        assert "./dev env sync exp001 --owner '팀원 가' --relock" in status
     finally:
         requirements.write_text(original_requirements, encoding="utf-8")
 
     comparison = "Global/artifacts/비교 결과/validation.csv"
     reference_id = Path(runs[1]).name
     output = run(
-        "./poc",
+        "./dev",
         "compare",
         "--runs",
         *runs,
@@ -289,7 +289,7 @@ def test_compose_up_starts_workspace_trains_and_preserves_results(docker_workspa
     run("docker", "compose", "up", "-d", "--wait", timeout=120)
     assert run("docker", "compose", "ps", "-q", "cpu").strip() != container_id
     run(
-        "./poc", "compare", "--runs", *runs, "--output", "Global/artifacts/restarted-comparison.csv"
+        "./dev", "compare", "--runs", *runs, "--output", "Global/artifacts/restarted-comparison.csv"
     )
     assert (workspace / "Global/artifacts/restarted-comparison.csv").is_file()
 
@@ -305,9 +305,9 @@ def test_compose_up_starts_workspace_trains_and_preserves_results(docker_workspa
     )
     assert replacements == 1 and changed != original
     pyproject.write_text(changed, encoding="utf-8")
-    run("./poc", "shell", "-c", "true", expected_returncode=2)
-    run("./poc", "deps", "lock")
-    run("./poc", "deps", "export")
+    run("./dev", "shell", "-c", "true", expected_returncode=2)
+    run("./dev", "deps", "lock")
+    run("./dev", "deps", "export")
     before_rebuild = run("docker", "compose", "ps", "-q", "cpu").strip()
     run("docker", "compose", "up", "--build", "-d", "--wait", timeout=900)
     after_rebuild = run("docker", "compose", "ps", "-q", "cpu").strip()
@@ -316,7 +316,7 @@ def test_compose_up_starts_workspace_trains_and_preserves_results(docker_workspa
         f"Compose version: {run('docker', 'compose', 'version', '--short')}. "
         "Use the supported Compose version (2.40.3 or later)."
     )
-    run("./poc", "check")
+    run("./dev", "check")
 
 
 def test_workspace_worker_retries_saved_runs_when_tracking_returns(
@@ -353,14 +353,14 @@ def test_workspace_worker_retries_saved_runs_when_tracking_returns(
     try:
         server["run"]("stop", "tracking")
         if not (workspace / "Global/data/prepared/demo-v1/dataset.json").exists():
-            run("./poc", "demo")
-        run("./poc", "init", "--owner", "복구검증가", "--data", "Global/data/prepared/demo-v1")
+            run("./dev", "demo")
+        run("./dev", "init", "--owner", "복구검증가", "--data", "Global/data/prepared/demo-v1")
         local_runs = {}
         for owner in ("복구검증가", "복구검증나"):
-            run("./poc", "new", "retry001", "--owner", owner, "--script", "fit_model.py")
+            run("./dev", "new", "retry001", "--owner", owner, "--script", "fit_model.py")
             if owner == "복구검증가":
                 run(
-                    "./poc",
+                    "./dev",
                     "env",
                     "add",
                     "retry001",
@@ -371,7 +371,7 @@ def test_workspace_worker_retries_saved_runs_when_tracking_returns(
                 )
             resource = workspace / "Members" / owner / "experiments/retry001/settings.yaml"
             resource.write_text("preprocessing: median\n")
-            run("./poc", "exec", "retry001", "--owner", owner, "fit_model.py", timeout=300)
+            run("./dev", "exec", "retry001", "--owner", owner, "fit_model.py", timeout=300)
             saved = list(
                 (workspace / "Global/artifacts" / owner / "retry001").glob("*/result.json")
             )
@@ -446,7 +446,7 @@ def test_workspace_worker_retries_saved_runs_when_tracking_returns(
 
         remote_comparison = "Global/artifacts/overlay-remote-comparison.csv"
         run(
-            "./poc",
+            "./dev",
             "compare",
             "--remote",
             "--run-ids",
@@ -463,7 +463,7 @@ def test_workspace_worker_retries_saved_runs_when_tracking_returns(
         selected_id, selected_run = next(iter(local_runs.items()))
         server["run"]("stop", "tracking")
         response = run(
-            "./poc",
+            "./dev",
             "archive",
             "--run",
             selected_run["directory"].relative_to(workspace).as_posix(),
@@ -509,10 +509,10 @@ def test_personal_notebook_kernel_runs_packages_and_survives_workspace_restart(
     owner = "개인 패키지 팀원" if personal_packages else "공통 패키지 팀원"
     experiment = "notebook001"
     expected_prefix = f"/workspace/Members/{owner}/.venv" if personal_packages else "/opt/venv"
-    run("./poc", "new", experiment, "--owner", owner)
+    run("./dev", "new", experiment, "--owner", owner)
     if personal_packages:
-        run("./poc", "env", "add", experiment, "--owner", owner, "tabulate==0.9.0", timeout=300)
-    run("./poc", "env", "kernel", experiment, "--owner", owner, timeout=300)
+        run("./dev", "env", "add", experiment, "--owner", owner, "tabulate==0.9.0", timeout=300)
+    run("./dev", "env", "kernel", experiment, "--owner", owner, timeout=300)
     display = f"SixSeven · {owner} / {experiment}"
     kernel_code = (
         "import sys, os\n"
@@ -566,7 +566,7 @@ def test_personal_notebook_kernel_runs_packages_and_survives_workspace_restart(
             run("docker", "compose", "down")
             run("docker", "compose", "up", "-d", "--wait", timeout=120)
         # Check discovery by the actual running Jupyter service, not just a local spec reader.
-        servers = run("./poc", "shell", "-c", "jupyter server list --json")
+        servers = run("./dev", "shell", "-c", "jupyter server list --json")
         server = next(json.loads(line) for line in servers.splitlines() if line.startswith("{"))
         request = Request(
             f"http://127.0.0.1:{notebook_port}/api/kernelspecs",
@@ -576,49 +576,49 @@ def test_personal_notebook_kernel_runs_packages_and_survives_workspace_restart(
             specs = json.load(response)["kernelspecs"]
         assert display in {item["spec"]["display_name"] for item in specs.values()}
         assert "Personal notebook kernel verified" in run(
-            "./poc", "shell", "-c", "python Global/artifacts/notebook-kernel-check.py", timeout=120
+            "./dev", "shell", "-c", "python Global/artifacts/notebook-kernel-check.py", timeout=120
         )
     if personal_packages:
-        run("./poc", "env", "remove", experiment, "--owner", owner, "tabulate", timeout=300)
+        run("./dev", "env", "remove", experiment, "--owner", owner, "tabulate", timeout=300)
 
 
 def test_member_environment_reuse_isolation_and_reproduction(docker_workspace):
     workspace, run, _ = docker_workspace
-    run("./poc", "up", "-d", "--wait", timeout=900)
+    run("./dev", "up", "-d", "--wait", timeout=900)
     owner = "공유 환경 팀원"
     member = workspace / "Members" / owner
-    run("./poc", "init", "--owner", owner, "--data", "Global/data/prepared/demo-v1")
+    run("./dev", "init", "--owner", owner, "--data", "Global/data/prepared/demo-v1")
     for name in ("shared001", "shared002"):
-        run("./poc", "new", name)
+        run("./dev", "new", name)
         (member / "experiments" / name / "probe.py").write_text(
             "import json, sys, tabulate\n"
             "print(json.dumps({'prefix': sys.prefix, 'version': tabulate.__version__}))\n"
         )
-    run("./poc", "env", "add", "shared001", "tabulate==0.9.0", timeout=300)
+    run("./dev", "env", "add", "shared001", "tabulate==0.9.0", timeout=300)
     stamp = (member / ".venv/pyvenv.cfg").stat().st_mtime_ns
-    run("./poc", "env", "add", "shared001", "tabulate==0.9.0", timeout=300)
-    run("./poc", "env", "sync", "shared002", timeout=300)
+    run("./dev", "env", "add", "shared001", "tabulate==0.9.0", timeout=300)
+    run("./dev", "env", "sync", "shared002", timeout=300)
     assert (member / ".venv/pyvenv.cfg").stat().st_mtime_ns == stamp
-    run("./poc", "new", "shared003", "--from", "shared001")
+    run("./dev", "new", "shared003", "--from", "shared001")
     cloned = member / "experiments/shared003"
     assert cloned.joinpath("probe.py").is_file()
     assert not cloned.joinpath(".venv").exists()
-    run("./poc", "notebook", "shared003", timeout=300)
+    run("./dev", "notebook", "shared003", timeout=300)
     notebook = json.loads((cloned / "analysis.ipynb").read_text())
     assert notebook["metadata"]["kernelspec"]["display_name"].endswith("/ shared003")
-    assert "준비 완료" in run("./poc", "status")
+    assert "준비 완료" in run("./dev", "status")
     assert (member / ".venv/pyvenv.cfg").stat().st_mtime_ns == stamp
     for name in ("shared001", "shared002"):
-        status = run("./poc", "env", "status", name)
+        status = run("./dev", "env", "status", name)
         assert "개인 공통" in status
-        probe = json.loads(run("./poc", "exec", name, "probe.py", timeout=300))
+        probe = json.loads(run("./dev", "exec", name, "probe.py", timeout=300))
         assert probe == {"prefix": f"/workspace/Members/{owner}/.venv", "version": "0.9.0"}
         assert not (member / "experiments" / name / ".venv").exists()
     assert (member / ".venv/pyvenv.cfg").stat().st_mtime_ns == stamp
     # Two independently edited experiments can train concurrently in one member environment.
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [
-            pool.submit(run, "./poc", "exec", name, "train.py", timeout=300)
+            pool.submit(run, "./dev", "exec", name, "train.py", timeout=300)
             for name in ("shared001", "shared002")
         ]
         for future in futures:
@@ -628,17 +628,17 @@ def test_member_environment_reuse_isolation_and_reproduction(docker_workspace):
         filename: (member / filename).read_bytes()
         for filename in ("requirements.in", "requirements.lock", "environment.json")
     }
-    run("./poc", "env", "isolate", "shared002", timeout=300)
-    run("./poc", "env", "add", "shared002", "tabulate==0.8.10", timeout=300)
-    assert "실험 전용" in run("./poc", "env", "status", "shared002")
-    probe = json.loads(run("./poc", "exec", "shared002", "probe.py"))
+    run("./dev", "env", "isolate", "shared002", timeout=300)
+    run("./dev", "env", "add", "shared002", "tabulate==0.8.10", timeout=300)
+    assert "실험 전용" in run("./dev", "env", "status", "shared002")
+    probe = json.loads(run("./dev", "exec", "shared002", "probe.py"))
     assert probe == {
         "prefix": f"/workspace/Members/{owner}/experiments/shared002/.venv",
         "version": "0.8.10",
     }
-    assert json.loads(run("./poc", "exec", "shared001", "probe.py"))["version"] == "0.9.0"
+    assert json.loads(run("./dev", "exec", "shared001", "probe.py"))["version"] == "0.9.0"
     assert owner_locks == {filename: (member / filename).read_bytes() for filename in owner_locks}
-    run("./poc", "exec", "shared002", "train.py", timeout=300)
+    run("./dev", "exec", "shared002", "train.py", timeout=300)
     selected = []
     for name, version in (("shared001", "0.9.0"), ("shared002", "0.8.10")):
         saved = max(
@@ -649,12 +649,12 @@ def test_member_environment_reuse_isolation_and_reproduction(docker_workspace):
         assert result["software"]["packages"]["tabulate"] == version
         assert f"tabulate=={version}" in (saved.parent / "resources/requirements.lock").read_text()
         selected.append(saved.parent.relative_to(workspace).as_posix())
-    run("./poc", "compare", "--runs", *selected, "--output", "Global/artifacts/shared-env.csv")
-    assert "shared001" in run("./poc", "compare", "--experiment", "shared001", "--list")
-    run("./poc", "restore", "restored001", "--run", selected[1])
-    assert "실험 전용" in run("./poc", "env", "status", "restored001")
-    run("./poc", "exec", "restored001", "train.py", timeout=300)
-    restored = json.loads(run("./poc", "exec", "restored001", "probe.py"))
+    run("./dev", "compare", "--runs", *selected, "--output", "Global/artifacts/shared-env.csv")
+    assert "shared001" in run("./dev", "compare", "--experiment", "shared001", "--list")
+    run("./dev", "restore", "restored001", "--run", selected[1])
+    assert "실험 전용" in run("./dev", "env", "status", "restored001")
+    run("./dev", "exec", "restored001", "train.py", timeout=300)
+    restored = json.loads(run("./dev", "exec", "restored001", "probe.py"))
     assert restored["version"] == "0.8.10"
     assert owner_locks == {filename: (member / filename).read_bytes() for filename in owner_locks}
-    assert json.loads(run("./poc", "exec", "shared001", "probe.py"))["version"] == "0.9.0"
+    assert json.loads(run("./dev", "exec", "shared001", "probe.py"))["version"] == "0.9.0"

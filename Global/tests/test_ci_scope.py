@@ -81,7 +81,7 @@ def test_personal_and_model_code_keep_linux_tests_without_platform_or_docker_rep
         "compose.yaml",
         ".dockerignore",
         ".env.example",
-        "poc",
+        "dev",
         "Global/scripts/start_workspace.py",
         "Global/scripts/container_entrypoint.py",
         "Global/scripts/workspace_health.py",

@@ -101,14 +101,14 @@ def show_workspace_status(
         }[image]
     )
     if image == "update-needed":
-        print("다음: 학습·저장 후 ./poc down → ./poc up -d --wait (GPU는 --gpu)")
+        print("다음: 학습·저장 후 ./dev down → ./dev up -d --wait (GPU는 --gpu)")
     try:
         settings = read_settings(root)
     except (ValueError, OSError):
         settings = {}
-        print("개인 설정을 읽을 수 없습니다. 다음: ./poc init")
+        print("개인 설정을 읽을 수 없습니다. 다음: ./dev init")
     if not settings:
-        print("이름·데이터: 미등록. 다음: ./poc music → ./poc init")
+        print("이름·데이터: 미등록. 다음: ./dev music → ./dev init")
     else:
         print(f"이름: {display_text(settings['owner'])}")
         location = root / settings["data"]
@@ -119,7 +119,7 @@ def show_workspace_status(
         )
         print("데이터 무결성·환자 분할은 학습·저장 시 다시 검증합니다.")
         if not ready:
-            print("다음: ./poc music 후 ./poc init에서 준비된 데이터 경로 확인")
+            print("다음: ./dev music 후 ./dev init에서 준비된 데이터 경로 확인")
         from .personal_env import _env_command, env_status
 
         experiments = root / "Members" / settings["owner"] / "experiments"
@@ -146,6 +146,6 @@ def show_workspace_status(
                 f"로컬 전송 기록: 완료 {status['synced']} · 대기 {status['pending']} · "
                 f"모델 보관 대기 {status['archive_pending']} · 확인 필요 {status['invalid']}"
             )
-            print("서버의 현재 상태와 실패 원인 확인: ./poc sync")
+            print("서버의 현재 상태와 실패 원인 확인: ./dev sync")
     except (ValueError, OSError):
-        print("MLflow 설정·전송 기록 확인 필요. .env 설정 확인 후 ./poc sync")
+        print("MLflow 설정·전송 기록 확인 필요. .env 설정 확인 후 ./dev sync")
