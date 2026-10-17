@@ -1,0 +1,36 @@
+name: sixseven-tracking
+
+services:
+  tracking:
+    image: sixseven-poc:tracking
+    build:
+      context: .
+      dockerfile: Global/Dockerfile.tracking
+    init: true
+    restart: unless-stopped
+    environment:
+      MLFLOW_AUTH_ADMIN_USERNAME: "${MLFLOW_AUTH_ADMIN_USERNAME:?Set MLFLOW_AUTH_ADMIN_USERNAME}"
+      MLFLOW_AUTH_ADMIN_PASSWORD: "${MLFLOW_AUTH_ADMIN_PASSWORD:-}"
+      MLFLOW_FLASK_SERVER_SECRET_KEY: "${MLFLOW_FLASK_SERVER_SECRET_KEY:?Set MLFLOW_FLASK_SERVER_SECRET_KEY}"
+      MLFLOW_SERVER_ALLOWED_HOSTS: "${MLFLOW_SERVER_ALLOWED_HOSTS:-localhost:*,127.0.0.1:*}"
+      MLFLOW_ENABLE_ASYNC_LOGGING: "false"
+    ports:
+      - "${POC_MLFLOW_BIND_HOST:-127.0.0.1}:${POC_MLFLOW_PORT:-5000}:5000"
+    volumes:
+      - tracking-data:/var/lib/mlflow
+    healthcheck:
+      test: ["CMD", "python", "/opt/tracking/start_tracking_server.py", "health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 6
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  tracking-data:

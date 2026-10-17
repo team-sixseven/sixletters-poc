@@ -1,5 +1,6 @@
 """CLI routing preserves ownership, arbitrary filenames, and personal script arguments."""
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -117,14 +118,33 @@ def test_environment_status_reports_member_default_without_installing(
     assert "실험 전용 · Members/팀원/experiments/exp001" in capsys.readouterr().out
 
 
+def test_environment_status_preserves_legacy_data_and_settings(workspace, monkeypatch):
+    migration = workspace / "Global/scripts/migrate_layout.py"
+    migration.parent.mkdir(parents=True)
+    shutil.copyfile(Path(__file__).resolve().parents[1] / "scripts/migrate_layout.py", migration)
+    legacy = workspace / "data/probe.txt"
+    legacy.parent.mkdir()
+    legacy.write_text("existing data", encoding="utf-8")
+    settings = workspace / ".poc.local.toml"
+    settings.write_text('owner = "팀원"\ndata = "data"\n', encoding="utf-8")
+    original_settings = settings.read_bytes()
+    init_experiment("팀원", "exp001", root=workspace / "Members")
+
+    assert invoke(monkeypatch, "env", "status", "exp001", "--owner", "팀원") == 0
+
+    assert legacy.read_text(encoding="utf-8") == "existing data"
+    assert not (workspace / "Global/data").exists()
+    assert settings.read_bytes() == original_settings
+
+
 @pytest.mark.parametrize(
     "context, container, gpu, prefix",
     [
-        (None, None, None, ["uv", "run", "--project", "Global", "poc"]),
-        (None, "1", None, ["uv", "run", "--project", "Global", "poc"]),
-        ("container", "1", "gpu", ["uv", "run", "--project", "Global", "poc"]),
-        ("host", "1", "cpu", ["uv", "run", "--project", "Global", "poc"]),
-        ("host", "1", "gpu", ["uv", "run", "--project", "Global", "poc"]),
+        (None, None, None, ["./poc"]),
+        (None, "1", None, ["poc"]),
+        ("container", "1", "gpu", ["poc"]),
+        ("host", "1", "cpu", ["./poc"]),
+        ("host", "1", "gpu", ["./poc", "--gpu"]),
     ],
 )
 def test_exec_and_status_share_refresh_reason_and_complete_command(
@@ -132,6 +152,8 @@ def test_exec_and_status_share_refresh_reason_and_complete_command(
 ):
     import shlex
 
+    if context is None and container is None and Path("/opt/poc/dependencies.sha256").is_file():
+        prefix = ["poc"]
     owner, name = "다른 팀원's", "실험 1"
     config = init_experiment(owner, name, root=workspace / "Members")
     active = personal_env.environment_directory(config.parent)
@@ -178,17 +200,5 @@ def test_notebook_refresh_error_has_actual_experiment_command(workspace, monkeyp
     import shlex
 
     command = capsys.readouterr().err.split("다음: ")[-1].strip()
-    assert shlex.split(command) == [
-        "uv",
-        "run",
-        "--project",
-        "Global",
-        "poc",
-        "env",
-        "sync",
-        "실험 1",
-        "--owner",
-        "팀원",
-        "--relock",
-    ]
+    assert shlex.split(command) == ["poc", "env", "sync", "실험 1", "--owner", "팀원", "--relock"]
     assert not (config.parent / "analysis.ipynb").exists()

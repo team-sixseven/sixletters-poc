@@ -5,6 +5,7 @@ import json
 import math
 import re
 import shlex
+import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -61,6 +62,7 @@ def _choose_indexes(
         else "비교할 번호를 공백으로 구분해 입력"
     )
     while True:
+        # EOF/noninteractive mistakes fail once; only a live terminal offers retry.
         try:
             selected = prompt(label + " (취소: q)")
             if selected.lower() in {"q", "quit", "취소"}:
@@ -105,14 +107,16 @@ def _catalog_selection(
         return []
     if not shown:
         raise ValueError(
-            "조건에 맞는 완료된 실행이 없습니다. --owner, --dataset, --feature-set 값과 조회 위치를 확인하세요. 데이터는 경로가 아닌 dataset_id로 입력합니다."
+            "조건에 맞는 완료된 실행이 없습니다. --owner, --dataset, --feature-set 값과 "
+            "조회 위치를 확인하세요. 데이터는 경로가 아닌 dataset_id로 입력합니다."
         )
     if len(shown) < count:
         print("이전 실행을 보려면 --limit를 늘리거나 이름·데이터·입력 그룹으로 좁히세요.")
     show_run_catalog(shown)
     if not archive and len(shown) < minimum:
         raise ValueError(
-            "비교에는 서로 다른 실행 2개 이상이 필요합니다. 필터를 줄이거나 --limit를 2 이상으로 늘리세요."
+            "비교에는 서로 다른 실행 2개 이상이 필요합니다. "
+            "필터를 줄이거나 --limit를 2 이상으로 늘리세요."
         )
     return [
         shown[index]
@@ -205,7 +209,7 @@ def show_comparison_deltas(summary) -> None:
             ("average_precision", "AP"),
             ("brier_score", "Brier"),
         ):
-            lower, upper = (row[f"{metric}_delta_ci_lower"], row[f"{metric}_delta_ci_upper"])
+            lower, upper = row[f"{metric}_delta_ci_lower"], row[f"{metric}_delta_ci_upper"]
             interval = (
                 f"[{lower:+.4f}, {upper:+.4f}]"
                 if lower is not None
@@ -241,6 +245,7 @@ def default_data_location(root: Path) -> str:
     try:
         settings = read_settings(root)
     except (ValueError, OSError):
+        # init can repair a malformed local setting through a fresh user selection.
         settings = {}
     if settings.get("data"):
         return settings["data"]
@@ -259,9 +264,12 @@ def main() -> int:
             stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Independent experiments with shared validation")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("status", help="Show local readiness and next steps without uploading")
+
     local = subparsers.add_parser("init", help="Register local owner and common data location")
     local.add_argument("--owner")
     local.add_argument("--data", type=Path)
+
     new = subparsers.add_parser("new", help="Create a personal experiment using the local owner")
     new.add_argument("name")
     new.add_argument("--from", dest="source", help="Copy existing experiment code and settings")
@@ -269,11 +277,13 @@ def main() -> int:
     new.add_argument("--script", help="Filename of the editable Python example")
     new.add_argument("--feature-set", choices=("clinical", "ecg", "combined"))
     new.add_argument("--model", choices=("logistic", "random-forest"))
+
     baselines = subparsers.add_parser(
         "baselines", help="Create six editable baseline experiments; does not train"
     )
     baselines.add_argument("prefix", nargs="?", default="baseline")
     baselines.add_argument("--owner")
+
     restore = subparsers.add_parser(
         "restore", help="Restore selected reproduction files into a new personal experiment"
     )
@@ -289,6 +299,7 @@ def main() -> int:
     restore_source.add_argument(
         "--remote", action="store_true", help="Select a complete archive from the server"
     )
+
     final = subparsers.add_parser(
         "final", help="Freeze candidates before test inference, then create the final report"
     )
@@ -328,6 +339,7 @@ def main() -> int:
     )
     final_status.add_argument("name")
     final_status.add_argument("--data", type=Path)
+
     notebook = subparsers.add_parser(
         "notebook", help="Prepare a personal notebook and package kernel"
     )
@@ -337,6 +349,7 @@ def main() -> int:
         "--file", default="analysis.ipynb", help="Notebook filename inside the experiment"
     )
     notebook.add_argument("--relock", action="store_true")
+
     environment = subparsers.add_parser(
         "env", help="Manage member packages and optional isolated experiments"
     )
@@ -357,6 +370,7 @@ def main() -> int:
             operation.add_argument(
                 "--repair", action="store_true", help="Reinstall even when ready"
             )
+
     execute = subparsers.add_parser(
         "exec", help="Execute your Python file in its experiment environment"
     )
@@ -366,10 +380,13 @@ def main() -> int:
     execute.add_argument(
         "script_args", nargs=argparse.REMAINDER, help="Arguments for your Python file"
     )
+
     practice = subparsers.add_parser("practice", help="Create your MUSIC practice notebook")
     practice.add_argument("--owner", help="Override the name registered by poc init")
+
     demo = subparsers.add_parser("demo", help="Prepare synthetic data for an execution check")
     demo.add_argument("--output", type=Path)
+
     music = subparsers.add_parser(
         "music", help="Download verified MUSIC CSVs and prepare shared labels, features and splits"
     )
@@ -381,14 +398,17 @@ def main() -> int:
         action="store_true",
         help="Use the verified local CSV cache without downloading",
     )
+
     sync = subparsers.add_parser("sync", help="Retry completed local results to the shared server")
     sync.add_argument("--root", type=Path, help="Local artifacts root")
+
     archive = subparsers.add_parser(
         "archive", help="Upload models and reproduction files for one selected local run"
     )
     archive.add_argument("--run", type=Path, help="Completed local run directory")
     archive.add_argument("--root", type=Path, help="Search local runs here when --run is omitted")
     _catalog_options(archive)
+
     prepare = subparsers.add_parser(
         "prepare", help="Save reviewed common inputs and patient splits"
     )
@@ -397,6 +417,7 @@ def main() -> int:
     prepare_source.add_argument("--csv", type=Path, help="Use a normalized, reviewed patient CSV")
     prepare.add_argument("--schema", type=Path, help="JSON column and target definitions for --csv")
     prepare.add_argument("--output", type=Path, required=True, help="New common data directory")
+
     initialize = subparsers.add_parser("init-experiment", help="Create a personal experiment")
     initialize.add_argument("--owner", required=True, help="Team member's folder name")
     initialize.add_argument("--name", required=True, help="Experiment folder name, e.g. exp001")
@@ -406,6 +427,7 @@ def main() -> int:
     initialize.add_argument("--root", type=Path, default=Path("Members"))
     initialize.add_argument("--script", default="train.py")
     initialize.add_argument("--model", choices=("logistic", "random-forest"), default="logistic")
+
     compare = subparsers.add_parser("compare", help="Compare validation results")
     compare.add_argument(
         "--mode",
@@ -454,12 +476,12 @@ def main() -> int:
                 parser.error("compare --remote cannot be combined with local --runs")
             if args.runs and args.root:
                 parser.error("compare accepts either --runs or --root, not both")
-            if args.run_ids and (not args.remote):
+            if args.run_ids and not args.remote:
                 parser.error("compare --run-ids requires --remote; use --runs for local paths")
             if args.run_ids and (
                 len(args.run_ids) < 2
                 or len(set(args.run_ids)) != len(args.run_ids)
-                or any(not re.fullmatch("[0-9a-f]{32}", value) for value in args.run_ids)
+                or any(not re.fullmatch(r"[0-9a-f]{32}", value) for value in args.run_ids)
             ):
                 parser.error("--run-ids requires at least two distinct 32-character server run IDs")
             if filters and (args.runs or args.run_ids):
@@ -480,18 +502,33 @@ def main() -> int:
             parser.error("Choose local --runs or remote candidates, not both")
         if args.run_ids and (
             len(set(args.run_ids)) != len(args.run_ids)
-            or any(not re.fullmatch("[0-9a-f]{32}", value) for value in args.run_ids)
+            or any(not re.fullmatch(r"[0-9a-f]{32}", value) for value in args.run_ids)
         ):
             parser.error("--run-ids requires distinct 32-character server run IDs")
     try:
         root = project_root()
+        migration = root / "Global/scripts/migrate_layout.py"
+        read_only = (
+            args.command == "status"
+            or getattr(args, "list_only", False)
+            or (args.command == "env" and args.env_action == "status")
+            or (args.command == "final" and args.final_action == "status")
+        )
+        if migration.is_file() and not read_only:
+            completed = subprocess.run([sys.executable, str(migration), "--quiet"], check=False)
+            if completed.returncode:
+                return completed.returncode
         for option in ("root", "data", "output", "run", "csv", "schema"):
             value = getattr(args, option, None)
             if value is not None:
                 setattr(args, option, resolve_workspace_path(root, value))
         if getattr(args, "runs", None):
             args.runs = [resolve_workspace_path(root, path) for path in args.runs]
-        if args.command == "init":
+        if args.command == "status":
+            from .workspace_status import show_workspace_status
+
+            show_workspace_status(root)
+        elif args.command == "init":
             owner = args.owner or prompt("이름")
             data = args.data or Path(prompt("공통 데이터 경로", default_data_location(root)))
             path = write_settings(root, owner, data)
@@ -536,7 +573,7 @@ def main() -> int:
                     raise ValueError("A baseline experiment already exists; use a new prefix")
             for name, model, group in specifications:
                 init_experiment(owner, name, feature_set=group, model=model, root=root / "Members")
-                command = ["uv", "run", "--project", "Global", "poc", "exec", name]
+                command = ["./poc", "exec", name]
                 if args.owner:
                     command.extend(["--owner", owner])
                 command.append("train.py")
@@ -723,9 +760,7 @@ def main() -> int:
             summary = sync_runs(args.root or root / "Global/artifacts")
             show_sync_summary(summary)
             if summary.get("disabled"):
-                print(
-                    "Set the shared MLflow connection variables in this shell, then run uv run --project Global poc sync."
-                )
+                print("Set the shared MLflow connection in .env and recreate the workspace.")
             elif summary.get("pending") or summary.get("invalid"):
                 return 1
         elif args.command == "archive":
@@ -741,13 +776,12 @@ def main() -> int:
             run_dir = selected[0]
             outcome = archive_run(run_dir)
             if outcome == "disabled":
-                print(
-                    "Set the shared MLflow connection variables in this shell, then run uv run --project Global poc archive again."
-                )
+                print("Set the shared MLflow connection in .env and recreate the workspace.")
                 return 1
             if outcome == "pending":
                 print(
-                    "Model archive pending. Keep the local run and retry with uv run --project Global poc sync."
+                    "Model archive pending. Keep the local run; the workspace retries selected "
+                    "archives. Run poc sync for an immediate retry."
                 )
                 return 1
             if outcome == "already_synced":
@@ -780,7 +814,7 @@ def main() -> int:
             from .run_catalog import compare_with_reference
 
             artifact_root = args.root or root / "Global/artifacts"
-            if args.reference is None and (not args.list_only):
+            if args.reference is None and not args.list_only:
                 print("처음 선택한 실행을 기준으로 점수 차이를 계산합니다.")
             if args.remote:
                 from .tracking import fetch_runs, list_remote_runs
@@ -804,9 +838,8 @@ def main() -> int:
                 if args.list_only:
                     return 0
             timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-            output = (
-                args.output
-                or root
+            output = args.output or (
+                root
                 / "Global/artifacts"
                 / "comparisons"
                 / f"{args.mode}-{timestamp}-{uuid4().hex[:8]}.csv"

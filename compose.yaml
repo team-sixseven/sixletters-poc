@@ -1,0 +1,71 @@
+name: sixseven-workspace
+
+x-workspace: &workspace
+  working_dir: /workspace
+  init: true
+  pull_policy: never
+  command: ["python", "Global/scripts/start_workspace.py"]
+  volumes:
+    - type: bind
+      source: .
+      target: /workspace
+  environment: &workspace-environment
+    SIXLETTERS_CONTAINER: "1"
+    POC_UID: "${POC_UID:-}"
+    POC_GID: "${POC_GID:-}"
+    HOME: /tmp/poc-home
+    PYTHONPATH: /workspace/Global/src
+    MPLCONFIGDIR: /tmp/poc-home/matplotlib
+    JUPYTER_RUNTIME_DIR: /tmp/poc-home/jupyter-runtime
+    UV_PROJECT: /workspace/Global
+    UV_PROJECT_ENVIRONMENT: /opt/venv
+    UV_NO_SYNC: "1"
+    UV_CACHE_DIR: /workspace/.poc-cache/uv
+    PRE_COMMIT_HOME: /workspace/.poc-cache/pre-commit
+    MLFLOW_TRACKING_URI: "${MLFLOW_TRACKING_URI:-}"
+    MLFLOW_TRACKING_USERNAME: "${MLFLOW_TRACKING_USERNAME:-}"
+    MLFLOW_TRACKING_PASSWORD: "${MLFLOW_TRACKING_PASSWORD:-}"
+    MLFLOW_EXPERIMENT_NAME: "${MLFLOW_EXPERIMENT_NAME:-sixseven-poc}"
+    POC_TRACKING_SYNC_INTERVAL: "${POC_TRACKING_SYNC_INTERVAL:-60}"
+    MLFLOW_HTTP_REQUEST_TIMEOUT: "${MLFLOW_HTTP_REQUEST_TIMEOUT:-10}"
+    MLFLOW_HTTP_REQUEST_MAX_RETRIES: "0"
+    MLFLOW_ARTIFACT_UPLOAD_DOWNLOAD_TIMEOUT: "${MLFLOW_ARTIFACT_UPLOAD_DOWNLOAD_TIMEOUT:-30}"
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  ports:
+    - "127.0.0.1:${POC_NOTEBOOK_PORT:-8888}:8888"
+  healthcheck:
+    test: ["CMD", "python", "Global/scripts/workspace_health.py"]
+    interval: 5s
+    timeout: 5s
+    start_period: 60s
+    retries: 6
+  shm_size: "2gb"
+
+services:
+  cpu:
+    <<: *workspace
+    image: sixseven-poc:cpu
+    build:
+      context: .
+      dockerfile: Global/Dockerfile
+      target: cpu
+  gpu:
+    <<: *workspace
+    environment:
+      <<: *workspace-environment
+      POC_REQUIRE_GPU: "1"
+    image: sixseven-poc:gpu
+    profiles: [gpu]
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Global/Dockerfile
+      target: gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

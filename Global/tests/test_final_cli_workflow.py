@@ -113,11 +113,7 @@ def test_printed_baseline_commands_execute_the_explicit_owner_with_spaces(
     owner = "Bob O'Neil"
     monkeypatch.setattr(sys, "argv", ["poc", "baselines", "shared trial", "--owner", owner])
     assert cli.main() == 0
-    commands = [
-        line
-        for line in capsys.readouterr().out.splitlines()
-        if line.startswith("uv run --project Global poc ")
-    ]
+    commands = [line for line in capsys.readouterr().out.splitlines() if line.startswith("./poc ")]
     executed = []
 
     def execute(directory, script, arguments):
@@ -127,7 +123,7 @@ def test_printed_baseline_commands_execute_the_explicit_owner_with_spaces(
 
     monkeypatch.setattr(personal_env, "execute_script", execute)
     for command in commands:
-        monkeypatch.setattr(sys, "argv", shlex.split(command)[4:])
+        monkeypatch.setattr(sys, "argv", shlex.split(command))
         assert cli.main() == 0
     assert len(executed) == 6
     assert all(path.parent == root / "Members" / owner / "experiments" for path in executed)

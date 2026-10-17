@@ -410,9 +410,7 @@ def _torch_backend(baseline: dict) -> str | None:
 def _uv_binary() -> str:
     executable = shutil.which("uv")
     if not executable:
-        raise ValueError(
-            f"uv {UV_VERSION} is required; install it in the project Python environment"
-        )
+        raise ValueError(f"uv {UV_VERSION} is required; run inside the project Docker environment")
     result = subprocess.run([executable, "--version"], capture_output=True, text=True, check=False)
     if result.returncode or result.stdout.split()[:2] != ["uv", UV_VERSION]:
         raise ValueError(f"uv {UV_VERSION} is required for experiment environment locks")
@@ -755,7 +753,14 @@ def _installed_matches(path: Path, manifest: dict, lock: str) -> bool:
 
 
 def _env_command(experiment: Path, action: str, *options: str) -> str:
-    command = ["uv", "run", "--project", "Global", "poc"]
+    context = os.environ.get("SIXLETTERS_COMMAND_CONTEXT")
+    in_container = (
+        os.environ.get("SIXLETTERS_CONTAINER") == "1"
+        or Path("/opt/poc/dependencies.sha256").is_file()
+    )
+    command = ["poc" if context != "host" and in_container else "./poc"]
+    if context == "host" and os.environ.get("SIXLETTERS_COMMAND_GPU") == "gpu":
+        command.append("--gpu")
     command.extend(["env", action, experiment.name])
     owner = _member_directory(experiment)
     if owner is not None:

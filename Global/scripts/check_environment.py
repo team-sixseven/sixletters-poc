@@ -18,12 +18,12 @@ def check_gpu() -> dict:
         import torch
     except ImportError as exc:
         raise RuntimeError(
-            "PyTorch가 없습니다. GPU를 지원하는 Python 환경에 PyTorch를 설치하세요."
+            "PyTorch가 없습니다. ./poc build --gpu로 GPU 이미지를 준비하세요."
         ) from exc
     if not torch.cuda.is_available():
         raise RuntimeError(
-            "CUDA GPU를 사용할 수 없습니다. NVIDIA 드라이버와 Python 환경의 "
-            "PyTorch CUDA 지원을 확인하세요. CPU 성공으로 대체하지 않습니다."
+            "CUDA GPU를 사용할 수 없습니다. Windows NVIDIA 드라이버, WSL2 및 "
+            "Docker GPU 연결을 확인하세요. CPU 성공으로 대체하지 않습니다."
         )
     left = torch.tensor([[1.0, 2.0], [3.0, 4.0]], device="cuda")
     right = torch.tensor([[5.0, 6.0], [7.0, 8.0]], device="cuda")

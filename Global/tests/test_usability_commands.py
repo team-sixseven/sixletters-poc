@@ -1,5 +1,7 @@
 """Convenience commands remain read-only until an explicit result selection."""
 
+import hashlib
+import json
 import sys
 import tomllib
 from pathlib import Path
@@ -7,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from sixletters import __main__ as cli
-from sixletters import reproduction, tracking
+from sixletters import reproduction, tracking, workspace_status
 from sixletters.local_settings import write_settings
 from sixletters.workspace import init_experiment
 
@@ -43,6 +45,24 @@ def test_interactive_empty_input_retries_but_eof_fails(monkeypatch):
     monkeypatch.setattr("builtins.input", end_input)
     with pytest.raises(ValueError, match="No input"):
         cli._choose_indexes(2)
+
+
+def test_final_status_does_not_migrate_legacy_data(tmp_path, monkeypatch):
+    migration = tmp_path / "Global/scripts/migrate_layout.py"
+    migration.parent.mkdir(parents=True)
+    migration.write_text("raise AssertionError('must not migrate')")
+    monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        sys, "argv", ["poc", "final", "status", "missing", "--data", "Global/data/demo"]
+    )
+    monkeypatch.setattr(cli.subprocess, "run", lambda *_a, **_kw: pytest.fail("migration"))
+    monkeypatch.setattr(
+        reproduction,
+        "final_plan_status",
+        lambda *_: (_ for _ in ()).throw(ValueError("missing plan")),
+    )
+    with pytest.raises(SystemExit, match="2"):
+        cli.main()
 
 
 @pytest.mark.parametrize(
@@ -133,3 +153,48 @@ def test_clone_cli_keeps_personal_code_and_new_identity(tmp_path, monkeypatch):
     assert target.joinpath("helper.py").read_text() == "VALUE = 42\n"
     assert target.joinpath("fit.py").is_file()
     assert tomllib.loads(target.joinpath("config.toml").read_text())["experiment"]["name"] == "new"
+
+
+def test_status_is_read_only_and_does_not_print_connection_secrets(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://private.example")
+    monkeypatch.setenv("MLFLOW_TRACKING_PASSWORD", "never-print-me")
+    monkeypatch.setattr(tracking, "_client", lambda *_: pytest.fail("network"))
+    before = list(tmp_path.rglob("*"))
+    workspace_status.show_workspace_status(tmp_path, manifest=tmp_path / "absent")
+    text = capsys.readouterr().out
+    assert "never-print-me" not in text and "private.example" not in text
+    assert "미등록" in text and "서버 접속은 확인하지 않음" in text
+    assert list(tmp_path.rglob("*")) == before
+
+
+def test_status_matches_current_destination_only(tmp_path, monkeypatch):
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://one.example")
+    monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "team")
+    root = tmp_path / "artifacts"
+    run = root / "member" / "exp001" / ("a" * 32)
+    run.mkdir(parents=True)
+    (run / "result.json").write_text("{}")
+    state_dir = root / ".tracking" / tracking._destination_key("https://one.example", "team")
+    state_dir.mkdir(parents=True)
+    (state_dir / f"{run.name}.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "local_identity": ["member", "exp001", run.name],
+                "status": "synced",
+            }
+        )
+    )
+    assert workspace_status.transfer_status(root)["synced"] == 1
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://two.example")
+    assert workspace_status.transfer_status(root)["pending"] == 1
+
+
+def test_image_readiness_explains_changed_dependencies(tmp_path):
+    dependency = tmp_path / "requirements.txt"
+    dependency.write_text("one")
+    manifest = tmp_path / "manifest"
+    manifest.write_text(hashlib.sha256(b"one").hexdigest() + "  requirements.txt\n")
+    assert workspace_status.image_dependency_status(tmp_path, manifest) == "ready"
+    dependency.write_text("two")
+    assert workspace_status.image_dependency_status(tmp_path, manifest) == "update-needed"
