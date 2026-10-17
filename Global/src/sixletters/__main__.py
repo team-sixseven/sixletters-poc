@@ -1,11 +1,16 @@
 """Workspace commands for common preparation and comparison, never model training."""
 
 import argparse
+import json
+import math
 import shlex
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from .local_settings import project_root, read_settings, resolve_workspace_path, write_settings
+from .run_catalog import display_text, filter_run_catalog, local_entry, show_run_catalog
 from .workspace import init_experiment, validate_component, validate_experiment_identity
 
 
@@ -22,10 +27,174 @@ def prompt(label: str, default: str | None = None) -> str:
     return value
 
 
+class SelectionCancelled(Exception):
+    """The person explicitly cancelled a catalog action."""
+
+
+def _choose_indexes(
+    count: int, *, archive: bool = False, minimum: int = 2, action: str | None = None
+) -> list[int]:
+    """Apply the same explicit-selection rules to local and shared result lists."""
+    minimum = 1 if archive else minimum
+    if count < minimum:
+        if archive:
+            raise ValueError("No completed local runs found; use --run for another location")
+        raise ValueError(f"At least {minimum} completed runs are needed")
+    label = action or (
+        "모델과 재현 파일을 추가 업로드할 번호 하나를 입력"
+        if archive
+        else "최종 후보로 고정할 번호를 공백으로 구분해 입력"
+        if minimum == 1
+        else "비교할 번호를 공백으로 구분해 입력"
+    )
+    while True:
+        try:
+            selected = prompt(label + " (취소: q)")
+            if selected.lower() in {"q", "quit", "취소"}:
+                raise SelectionCancelled
+            try:
+                indexes = [int(value) for value in selected.replace(",", " ").split()]
+            except ValueError as error:
+                raise ValueError("Choose run numbers, for example: 1 3") from error
+            if (
+                len(indexes) < minimum
+                or (archive and len(indexes) != 1)
+                or len(set(indexes)) != len(indexes)
+                or any(index < 1 or index > count for index in indexes)
+            ):
+                if archive:
+                    raise ValueError("Choose exactly one number from the displayed list")
+                if minimum == 1:
+                    raise ValueError(
+                        "Choose at least one valid, non-repeated number from the displayed list"
+                    )
+                raise ValueError("Choose at least two different numbers from the displayed list")
+            return [index - 1 for index in indexes]
+        except ValueError as error:
+            if not sys.stdin.isatty() or isinstance(error.__cause__, EOFError):
+                raise
+            print(f"{error}. 목록은 그대로입니다. 다시 입력하거나 q로 취소하세요.")
+
+
+def _catalog_selection(
+    entries: list[dict],
+    *,
+    archive: bool = False,
+    minimum: int = 2,
+    list_only: bool = False,
+    action: str | None = None,
+    **filters,
+) -> list[dict]:
+    shown, count = filter_run_catalog(entries, **filters)
+    print(f"조건에 맞는 실행 {count}개 중 최근 {len(shown)}개 표시 (점수순 아님).")
+    if list_only:
+        show_run_catalog(shown)
+        return []
+    if not shown:
+        raise ValueError(
+            "조건에 맞는 완료된 실행이 없습니다. --owner, --dataset, --feature-set 값과 조회 위치를 확인하세요. 데이터는 경로가 아닌 dataset_id로 입력합니다."
+        )
+    if len(shown) < count:
+        print("이전 실행을 보려면 --limit를 늘리거나 이름·데이터·입력 그룹으로 좁히세요.")
+    show_run_catalog(shown)
+    if not archive and len(shown) < minimum:
+        raise ValueError(
+            "비교에는 서로 다른 실행 2개 이상이 필요합니다. 필터를 줄이거나 --limit를 2 이상으로 늘리세요."
+        )
+    return [
+        shown[index]
+        for index in _choose_indexes(len(shown), archive=archive, minimum=minimum, action=action)
+    ]
+
+
+def choose_runs(
+    root: Path, run_dirs: list[Path] | None = None, *, archive: bool = False, **filters
+) -> list[Path]:
+    """Select completed local runs without traversing their saved model directories."""
+    entries = []
+    paths = (
+        sorted(root.glob("*/*/*/result.json"))
+        if run_dirs is None
+        else [directory / "result.json" for directory in run_dirs]
+    )
+    for path in paths:
+        if run_dirs is None and any(part.startswith(".") for part in path.relative_to(root).parts):
+            continue
+        if not (path.parent / "predictions.csv").is_file():
+            continue
+        try:
+            result = json.loads(path.read_text(encoding="utf-8"))
+            entry = local_entry(result, path)
+        except (ValueError, KeyError, TypeError, OSError):
+            print(f"Skipping incomplete result: {display_text(path, 240)}", file=sys.stderr)
+            continue
+        entries.append(entry)
+    selected = _catalog_selection(entries, archive=archive, **filters)
+    return [Path(entry["path"]) for entry in selected]
+
+
+def _positive_count(value: str) -> int:
+    try:
+        count = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("--limit에는 1 이상의 정수를 입력하세요.") from error
+    if count < 1:
+        raise argparse.ArgumentTypeError("--limit에는 1 이상의 정수를 입력하세요.")
+    return count
+
+
+def _catalog_options(parser: argparse.ArgumentParser, *, destination_owner: bool = False) -> None:
+    parser.add_argument(
+        "--source-owner" if destination_owner else "--owner",
+        help="Exact owner name in the run metadata",
+    )
+    parser.add_argument("--experiment", help="Exact experiment folder name in the run metadata")
+    parser.add_argument("--dataset", help="Exact dataset_id, not a data directory")
+    parser.add_argument("--feature-set", choices=("clinical", "ecg", "combined"))
+    parser.add_argument(
+        "--limit", type=_positive_count, help="Show this many recent matching runs (default: 20)"
+    )
+    parser.add_argument(
+        "--list",
+        dest="list_only",
+        action="store_true",
+        help="Show matching runs without selecting or changing anything",
+    )
+
+
 def show_experiment(path: Path, script: str = "train.py") -> None:
     print(f"Experiment created: {path.parent}")
     print(f"Training script: {path.with_name(script)}")
     print(f"Configuration: {path}")
+
+
+def show_comparison_deltas(summary) -> None:
+    reference = summary.loc[summary["is_reference"]].iloc[0]
+    identity = " / ".join(display_text(reference[key]) for key in ("owner", "experiment", "run_id"))
+    print(f"기준 실행: {identity}")
+    print("차이 = 대상 − 기준. AUROC·AP는 양수, Brier는 음수일수록 개선입니다.")
+    for _, row in summary.loc[~summary["is_reference"]].iterrows():
+        label = " / ".join(display_text(row[key]) for key in ("owner", "experiment", "run_id"))
+        values = []
+        for metric, name in (
+            ("roc_auc", "AUROC"),
+            ("average_precision", "AP"),
+            ("brier_score", "Brier"),
+        ):
+            lower, upper = (row[f"{metric}_delta_ci_lower"], row[f"{metric}_delta_ci_upper"])
+            interval = (
+                f"[{lower:+.4f}, {upper:+.4f}]"
+                if lower is not None
+                and upper is not None
+                and math.isfinite(lower)
+                and math.isfinite(upper)
+                else "계산 불가 (양성·음성 각 2명 이상 필요)"
+            )
+            values.append(f"{name} {row[f'{metric}_delta']:+.4f} · 95% 구간 {interval}")
+        print(f"{label}\n  " + " | ".join(values))
+    print(
+        "검증 환자를 함께 재추출한 차이 구간입니다. 학습·반복적인 모델 선택의 불확실성은 포함하지 않습니다."
+    )
 
 
 def personal_experiment(root: Path, owner: str | None, name: str) -> Path:
@@ -139,7 +308,36 @@ def main() -> int:
     initialize.add_argument("--root", type=Path, default=Path("Members"))
     initialize.add_argument("--script", default="train.py")
     initialize.add_argument("--model", choices=("logistic", "random-forest"), default="logistic")
+    compare = subparsers.add_parser("compare", help="Compare validation results")
+    compare.add_argument(
+        "--mode",
+        choices=("experiments", "inputs"),
+        default="experiments",
+        help="experiments: methods on one input group; inputs: input groups with one fixed method",
+    )
+    compare.add_argument("--runs", type=Path, nargs="+")
+    compare.add_argument("--output", type=Path)
+    compare.add_argument(
+        "--reference",
+        help="기준으로 삼을 저장된 실행 ID(목록의 이름/실험명 뒤 ID). 생략하면 첫 선택 실행",
+    )
+    compare.add_argument("--root", type=Path, help="Local result root")
+    _catalog_options(compare)
     args = parser.parse_args()
+    filters = {}
+    if args.command in ("compare",):
+        filters = {
+            key: getattr(args, key)
+            for key in ("owner", "dataset", "feature_set", "experiment", "limit")
+            if getattr(args, key, None) is not None
+        }
+        if args.list_only:
+            filters["list_only"] = True
+        if args.command == "compare":
+            if args.runs and args.root:
+                parser.error("compare accepts either --runs or --root, not both")
+            if filters and args.runs:
+                parser.error("Use filters for the run list, or explicit --runs, not both")
     if args.command == "prepare":
         if args.csv and args.schema is None:
             parser.error("prepare --csv requires --schema")
@@ -273,6 +471,29 @@ def main() -> int:
                 model=args.model,
             )
             show_experiment(path, args.script)
+        else:
+            from .run_catalog import compare_with_reference
+
+            artifact_root = args.root or root / "Global/artifacts"
+            if args.reference is None and (not args.list_only):
+                print("처음 선택한 실행을 기준으로 점수 차이를 계산합니다.")
+            runs = args.runs or choose_runs(artifact_root, **filters)
+            if args.list_only:
+                return 0
+            timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            output = (
+                args.output
+                or root
+                / "Global/artifacts"
+                / "comparisons"
+                / f"{args.mode}-{timestamp}-{uuid4().hex[:8]}.csv"
+            )
+            summary = compare_with_reference(runs, output, mode=args.mode, reference=args.reference)
+            show_comparison_deltas(summary)
+            print(f"Compared {len(summary)} validation runs: {output}")
+    except SelectionCancelled:
+        print("취소했습니다. 파일과 서버 결과는 변경하지 않았습니다.")
+        return 0
     except (ValueError, OSError, ImportError, TypeError) as error:
         parser.exit(2, f"{error}\n")
     return 0

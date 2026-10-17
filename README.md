@@ -33,3 +33,12 @@ uv run --project Global poc exec exp001 train.py
 ```
 
 `Members/alex/experiments/exp001/`의 코드·설정을 수정한다. 추가 패키지가 없으면 공통 환경을 사용한다. `uv run --project Global poc env add exp001 xgboost`로 필요한 패키지만 개인 환경에 추가한다. `uv run --project Global poc env isolate exp001`은 해당 실험만 분리한다. `Experiment.save()`는 평가와 결과 파일을 `Global/artifacts/`에 저장한다.
+
+## 결과 비교
+
+```sh
+uv run --project Global poc compare --list
+uv run --project Global poc compare
+```
+
+같은 데이터·분할·평가 기준의 실행을 선택한다. 목록에서 환자·SCD 수, 점수, 신뢰구간을 함께 본다. 기준 실행을 지정하면 점수 차이의 신뢰구간도 비교한다.

@@ -3,14 +3,20 @@
 import csv
 import hashlib
 import io
+import json
+import subprocess
+import sys
 from pathlib import Path
 from urllib.error import URLError
 
 import pandas as pd
 import pytest
 
+from sixletters.comparison import compare_runs
 from sixletters.data import music
 from sixletters.data.prepared import load_prepared_dataset
+from sixletters.local_settings import write_settings
+from sixletters.workspace import init_experiment
 
 
 def synthetic_rows():
@@ -47,6 +53,7 @@ def synthetic_rows():
     rows[2]["Holter  rhythm "] = "1"
     for index, cause in enumerate(("1", "6", "7"), start=4):
         rows[index].update({"Exit of the study": "3", "Cause of death": cause})
+    # Follow-up status must be used to exclude these rows, not assign label zero.
     for status in ("1", "2"):
         row = rows[3].copy()
         row.update({"Patient ID": f"EXCLUDED{status}", "Exit of the study": status})
@@ -96,12 +103,13 @@ def synthetic_sources(tmp_path, monkeypatch):
         response.headers = {"Content-Length": str(len(response.getvalue()))}
         return response
 
+    # Patch the transport only; hash checking and the cache remain production code.
     monkeypatch.setattr("urllib.request.urlopen", fetch)
     root = tmp_path / "팀 프로젝트"
     (root / "Members").mkdir(parents=True)
     (root / "Global").mkdir()
     (root / "Global/pyproject.toml").write_text('[project]\nname = "sixletters-poc"\n')
-    return (root, payloads, calls)
+    return root, payloads, calls
 
 
 def test_basic_preparation_preserves_values_and_excludes_followup_from_inputs(tmp_path):
@@ -110,7 +118,7 @@ def test_basic_preparation_preserves_values_and_excludes_followup_from_inputs(tm
     frame = dataset.frame.set_index("patient_id")
     assert len(frame) == 80
     assert frame.target.value_counts().to_dict() == {0: 50, 1: 30}
-    assert frame.loc["SYN050", "target"] == 1
+    assert frame.loc["SYN050", "target"] == 1  # Observed event, even after four years.
     assert frame.loc[["SYN004", "SYN005", "SYN006"], "target"].eq(0).all()
     assert pd.isna(frame.loc["SYN000", by_source["Age"]])
     assert frame.loc["SYN001", by_source["Body Mass Index (Kg/m2)"]] == 24.75
@@ -315,3 +323,31 @@ def test_bad_download_never_becomes_trusted_cache(synthetic_sources, monkeypatch
     assert not music.get_music_destination(root).exists()
     assert not list((root / "Global/data" / "raw").rglob("subject-info.csv"))
     assert not list((root / "Global/data" / "raw").rglob(".music-download-*"))
+
+
+def test_prepared_inputs_support_two_independent_training_scripts_and_comparison(
+    synthetic_sources,
+):
+    root, _, _ = synthetic_sources
+    data = music.prepare_music(root)
+    runs = []
+    for owner in ("팀원가", "팀원나"):
+        write_settings(root, owner, data.parent)
+        config = init_experiment(owner, "exp001", feature_set="combined", root=root / "Members")
+        # Each contributor executes their own script, including from an IDE working directory.
+        result = subprocess.run(
+            [sys.executable, str(config.with_name("train.py"))],
+            cwd=config.parent,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        run = next((root / "Global/artifacts" / owner / "exp001").glob("*/result.json"))
+        payload = json.loads(run.read_text(encoding="utf-8"))
+        assert payload["synthetic"] is False  # The MUSIC adapter marks its verified source type.
+        runs.append(run.parent)
+    summary = compare_runs(runs, root / "comparison.csv")
+    assert summary.owner.tolist() == ["팀원가", "팀원나"]
+    assert summary.roc_auc.nunique() == 1

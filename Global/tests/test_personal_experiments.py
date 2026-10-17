@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from sixletters.comparison import compare_runs
 from sixletters.data.demo import make_demo_dataset
 from sixletters.data.prepared import save_prepared_dataset
 from sixletters.experiment import Experiment
@@ -71,6 +72,28 @@ def test_save_aligns_shuffled_predictions_by_id_and_uses_shared_truth(setup_expe
     )
     assert (run / "models/weights.npz").read_bytes() == model.read_bytes()
     assert json.loads((run / "result.json").read_text(encoding="utf-8"))["schema_version"] == 3
+
+
+@pytest.mark.parametrize("score_dtype", [np.float16, np.float32])
+def test_lower_precision_predictions_roundtrip_and_compare_without_metric_drift(
+    setup_experiment, tmp_path, score_dtype
+):
+    _, data, config, model = setup_experiment
+    runs = []
+    for _ in range(2):
+        experiment = Experiment(data, config, output_root=tmp_path / "artifacts")
+        validation = experiment.validation_data()
+        scores = np.linspace(0.1, 0.9, len(validation), dtype=score_dtype)
+        predictions = pd.DataFrame({"patient_id": validation.index, "score": scores})
+        run = experiment.save(predictions, model_files={"weights.npz": model})
+        reloaded = pd.read_csv(run / "predictions.csv", float_precision="round_trip")
+        np.testing.assert_array_equal(reloaded["score"].to_numpy(), scores.astype(float))
+        assert predictions["score"].dtype == score_dtype
+        runs.append(run)
+    summary = compare_runs(runs, tmp_path / "comparison.csv")
+    assert len(summary) == 2
+    for metric in ("roc_auc", "average_precision", "brier_score"):
+        assert summary[metric].iloc[0] == summary[metric].iloc[1]
 
 
 @pytest.mark.parametrize(

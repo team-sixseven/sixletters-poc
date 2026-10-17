@@ -1,14 +1,6 @@
 """Read-only personal environment summaries."""
 
-import unicodedata
-
-
-def display_text(value: object, limit: int = 120) -> str:
-    """Keep saved metadata on one bounded line without terminal control sequences."""
-    text = "".join(
-        " " if unicodedata.category(char).startswith("C") else char for char in str(value)
-    )
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+from .run_catalog import display_text
 
 
 def show_environment_status(status: dict) -> None:

@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from sixletters.local_settings import SETTINGS_FILE, configured_data, read_settings, write_settings
@@ -96,6 +97,36 @@ def test_local_data_is_optional_when_personal_script_receives_explicit_arguments
     trained = run(checkout, script, "--data", checkout / "Global/data/prepared/demo-v1")
     assert trained.returncode == 0, trained.stderr
     assert not (checkout / SETTINGS_FILE).exists()
+
+
+def test_compare_interactive_choice_recalculates_predictions_and_refuses_invalid_selection(
+    checkout,
+):
+    assert cli(checkout, "demo").returncode == 0
+    for owner in ("팀원 가", "팀원 나"):
+        write_settings(checkout, owner, Path("Global/data/prepared/demo-v1"))
+        assert cli(checkout, "new", "exp001").returncode == 0
+        script = checkout / "Members" / owner / "experiments/exp001/train.py"
+        trained = run(checkout, script)
+        assert trained.returncode == 0, trained.stderr
+    rejected = cli(checkout, "compare", input_text="1 1\n")
+    assert rejected.returncode == 2
+    assert not (checkout / "Global/artifacts/comparisons").exists()
+    compared = cli(checkout, "compare", input_text="2 1\n")
+    assert compared.returncode == 0, compared.stderr
+    summary = pd.read_csv(next((checkout / "Global/artifacts/comparisons").glob("*.csv")))
+    # The later save is listed first; selection order still follows the entered numbers.
+    assert "1. 팀원 나 / exp001" in compared.stdout
+    assert "2. 팀원 가 / exp001" in compared.stdout
+    assert summary.owner.tolist() == ["팀원 가", "팀원 나"]
+    first_run = next((checkout / "Global/artifacts/팀원 가/exp001").glob("*/result.json"))
+    corrupted = json.loads(first_run.read_text(encoding="utf-8"))
+    corrupted["metrics"]["roc_auc"] = -1
+    first_run.write_text(json.dumps(corrupted), encoding="utf-8")
+    mismatched = cli(checkout, "compare", input_text="1 2\n")
+    assert mismatched.returncode == 2
+    assert "Saved metrics do not match predictions" in mismatched.stderr
+    assert len(list((checkout / "Global/artifacts/comparisons").glob("*.csv"))) == 1
 
 
 def test_new_without_owner_and_init_without_input_fail_clearly(checkout):
