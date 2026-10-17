@@ -2,10 +2,10 @@
 
 ## 1. MUSIC 다운로드부터 환자 분할까지
 
-Jupyter 또는 컨테이너 터미널에서 실행한다. Ubuntu 터미널에서는 `poc` 대신 `./dev`를 사용한다.
+Jupyter 또는 컨테이너 터미널에서 실행한다. Ubuntu 터미널에서는 `dev` 대신 `./dev`를 사용한다.
 
 ```sh
-poc music
+dev music
 ```
 
 MUSIC **1.0.1**의 `subject-info.csv`, `subject-info_codes.csv`, `subject-info_definitions.csv`를 공식 저장소에서 내려받는다. 원본 3개의 SHA-256(파일 내용이 같은지 확인하는 값)을 확인한 뒤 정답·컬럼·환자 분할을 정리한다. 원시 파형은 내려받지 않는다.
@@ -14,12 +14,12 @@ MUSIC **1.0.1**의 `subject-info.csv`, `subject-info_codes.csv`, `subject-info_d
 
 | 분석 | 명령 | 준비 데이터 경로 | 환자 / SCD | 입력 변수 |
 |---|---|---|---:|---|
-| 기본 | `poc music` | `Global/data/prepared/music-scd-basic-v1` | 961 / 94 | 임상 64개 + ECG 5개 |
-| HRV 추가 | `poc music --cohort hrv` | `Global/data/prepared/music-scd-hrv-v1` | 571 / 51 | 임상 64개 + ECG 5개 + HRV 4개 |
+| 기본 | `dev music` | `Global/data/prepared/music-scd-basic-v1` | 961 / 94 | 임상 64개 + ECG 5개 |
+| HRV 추가 | `dev music --cohort hrv` | `Global/data/prepared/music-scd-hrv-v1` | 571 / 51 | 임상 64개 + ECG 5개 + HRV 4개 |
 
 HRV는 심장 박동 간격의 변동성이다. HRV 분석은 **Holter 기록이 동율동(심장의 정상 박동 생성 위치에서 시작하는 리듬)이며 HRV 4개 값이 모두 있는 환자**로 제한한다. 기본 분석과 대상 환자가 다르므로 두 데이터의 결과를 같은 조건의 성능 비교로 취급하지 않는다.
 
-인터넷 없이 다시 준비하려면 `poc music --offline`을 사용한다. HRV 분석은 `poc music --cohort hrv --offline`이다. 원본 3개가 이미 내려받아져 있고 확인 값이 일치해야 한다.
+인터넷 없이 다시 준비하려면 `dev music --offline`을 사용한다. HRV 분석은 `dev music --cohort hrv --offline`이다. 원본 3개가 이미 내려받아져 있고 확인 값이 일치해야 한다.
 
 같은 명령을 다시 실행하면 원본과 산출물을 검증한 뒤 재사용한다. 산출물의 누락·변경·추가가 있으면 덮어쓰지 않고 중단한다. 준비된 데이터를 수동으로 수정하지 않는다.
 
@@ -74,9 +74,9 @@ HRV는 심장 박동 간격의 변동성이다. HRV 분석은 **Holter 기록이
 | `source_manifest.json` | 공식 원본 위치와 SHA-256 |
 | `column_manifest.json` | 원본 컬럼별 사용·변환·보류 내역 |
 
-개인 데이터 경로는 `poc init`에서 등록한다. 기존 설정이 있으면 사용할 분석의 MUSIC 경로인지 확인한다. 실험 생성·학습은 [첫 실험 절차](../../README.md#2-music-준비와-사전-실습)를 따른다. 한 번만 HRV 데이터로 실행하려면 해당 데이터를 먼저 준비한 뒤 학습 명령에 `--data Global/data/prepared/music-scd-hrv-v1`을 붙인다.
+개인 데이터 경로는 `dev init`에서 등록한다. 기존 설정이 있으면 사용할 분석의 MUSIC 경로인지 확인한다. 실험 생성·학습은 [첫 실험 절차](../../README.md#2-music-준비와-사전-실습)를 따른다. 한 번만 HRV 데이터로 실행하려면 해당 데이터를 먼저 준비한 뒤 학습 명령에 `--data Global/data/prepared/music-scd-hrv-v1`을 붙인다.
 
-각자 원본을 다운로드해 같은 버전의 준비 기능을 실행하면 된다. 데이터 원본·환자 ID·분할 목록·준비 파일은 Git에 올리지 않는다. 환자별 예시는 이슈·PR·노트북 출력에도 넣지 않는다. 실행 방법을 설명할 예시가 필요하면 `poc demo`로 합성 데이터를 만든다.
+각자 원본을 다운로드해 같은 버전의 준비 기능을 실행하면 된다. 데이터 원본·환자 ID·분할 목록·준비 파일은 Git에 올리지 않는다. 환자별 예시는 이슈·PR·노트북 출력에도 넣지 않는다. 실행 방법을 설명할 예시가 필요하면 `dev demo`로 합성 데이터를 만든다.
 
 공식 데이터는 [MUSIC 1.0.1](https://physionet.org/content/music-sudden-cardiac-death/1.0.1/)의 **Open Data Commons Open Database License 1.0**에 따라 사용하고, 보고서·제출 자료에는 공식 페이지의 데이터 및 논문 인용을 포함한다.
 
@@ -110,7 +110,7 @@ MUSIC 이외의 데이터를 추가할 때는 아래 형식의 UTF-8·쉼표 구
 임상·ECG 변수를 중복 없이 선언하고 범주형 열만 `categorical_features`에 적는다. 숫자형의 누락 코드는 빈 셀로 바꾼다. 범주형 문자열 `NA`는 값으로 유지되므로 원본에서 누락을 뜻한다면 미리 빈 셀로 변환한다. 선언하지 않은 추가 열은 저장하지 않는다.
 
 ```sh
-poc prepare --csv Global/data/processed/cohort.csv --schema Global/data/processed/schema.json --output Global/data/prepared/cohort-v1
+dev prepare --csv Global/data/processed/cohort.csv --schema Global/data/processed/schema.json --output Global/data/prepared/cohort-v1
 ```
 
 `prepare`는 형식·환자 중복·분할·입력 열·자료형을 검증해 `dataset.json`에 저장하며 기존 출력은 덮어쓰지 않는다. 정답의 임상적 타당성이나 사후 정보 사용 여부는 별도로 검토한다.

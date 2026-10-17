@@ -164,7 +164,7 @@ def test_cli_forwards_all_catalog_filters_to_requested_source(
     ]
     paths = [tmp_path / "one", tmp_path / "two"]
     monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
-    monkeypatch.setattr(sys, "argv", ["poc", *arguments])
+    monkeypatch.setattr(sys, "argv", ["dev", *arguments])
     calls = []
 
     def select(value, **filters):
@@ -228,7 +228,7 @@ def test_cli_forwards_all_catalog_filters_to_requested_source(
     ],
 )
 def test_invalid_or_ambiguous_cli_options_fail_before_any_io(monkeypatch, arguments):
-    monkeypatch.setattr(sys, "argv", ["poc", *arguments])
+    monkeypatch.setattr(sys, "argv", ["dev", *arguments])
     monkeypatch.setattr(cli, "project_root", lambda: pytest.fail("I/O before argument validation"))
     with pytest.raises(SystemExit, match="2"):
         cli.main()
@@ -241,7 +241,7 @@ def test_explicit_remote_ids_skip_listing_and_keep_order_for_full_validation(
     identifiers = ["b" * 32, "a" * 32]
     paths = [tmp_path / identifier for identifier in identifiers]
     result_root = tmp_path / ("reviewer-artifacts" if custom_root else "Global/artifacts")
-    arguments = ["poc", "compare", "--remote", "--run-ids", *identifiers, "--mode", "inputs"]
+    arguments = ["dev", "compare", "--remote", "--run-ids", *identifiers, "--mode", "inputs"]
     if custom_root:
         arguments += ["--root", str(result_root)]
     monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
@@ -277,7 +277,7 @@ def test_explicit_remote_ids_skip_listing_and_keep_order_for_full_validation(
 def test_explicit_local_paths_still_skip_catalog_filters_and_keep_order(tmp_path, monkeypatch):
     paths = [tmp_path / "second", tmp_path / "first"]
     monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
-    monkeypatch.setattr(sys, "argv", ["poc", "compare", "--runs", *map(str, paths)])
+    monkeypatch.setattr(sys, "argv", ["dev", "compare", "--runs", *map(str, paths)])
     monkeypatch.setattr(cli, "choose_runs", lambda *_: pytest.fail("catalog requested"))
     seen = []
 

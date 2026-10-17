@@ -651,7 +651,7 @@ def show_sync_summary(summary: dict) -> None:
             )
             print(f"- {identity} [{display_text(issue.get('code', 'unknown'), 40)}]")
         print(f"  원인: {display_text(issue.get('message', '확인 불가'), 240)}")
-        print(f"  조치: {display_text(issue.get('action', 'poc sync로 다시 확인하세요.'), 240)}")
+        print(f"  조치: {display_text(issue.get('action', 'dev sync로 다시 확인하세요.'), 240)}")
 
 
 def show_remote_issues(issues: list[dict]) -> None:

@@ -39,7 +39,7 @@ def _settings_update(root: Path, destinations: set[Path]) -> tuple[Path, str] | 
         data = tomllib.loads(original).get("data")
     except tomllib.TOMLDecodeError as error:
         if not destinations:
-            return None  # Keep poc init available to repair unrelated invalid local settings.
+            return None  # Keep dev init available to repair unrelated invalid local settings.
         raise ValueError("Invalid .poc.local.toml; fix it before migrating local files") from error
     if not isinstance(data, str):
         return None

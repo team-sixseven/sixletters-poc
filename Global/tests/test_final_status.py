@@ -16,6 +16,14 @@ from sixletters.run_catalog import show_final_status
 from sixletters.workspace import init_experiment
 
 
+@pytest.fixture(params=["host", "container"])
+def command_prefix(request, monkeypatch):
+    monkeypatch.setenv("SIXLETTERS_COMMAND_CONTEXT", request.param)
+    monkeypatch.setenv("SIXLETTERS_CONTAINER", "1")
+    monkeypatch.delenv("SIXLETTERS_COMMAND_GPU", raising=False)
+    return "./dev" if request.param == "host" else "dev"
+
+
 def frozen(candidate_fixture):
     root, data, runs = candidate_fixture
     directory = root / "Global/artifacts/final/submission"
@@ -42,7 +50,10 @@ def test_status_shows_every_missing_candidate_without_scores_or_execution(candid
     assert "AUROC" not in text and "patient_id" not in text
 
 
-def test_status_reports_partial_completion_and_all_complete_next_command(candidates):  # noqa: F811
+def test_status_reports_partial_completion_and_all_complete_next_command(
+    candidates,  # noqa: F811
+    command_prefix,
+):
     root, data, runs, directory = frozen(candidates)
     session = FinalEvaluation(directory, runs[0].name, data)
     session.save(predictions(session.validation_data(), 0.4), predictions(session.test_data(), 0.4))
@@ -54,7 +65,7 @@ def test_status_reports_partial_completion_and_all_complete_next_command(candida
     finished = final_plan_status(directory, data, root)
     assert finished["counts"] == {"complete": 2, "missing": 0, "invalid": 0}
     assert shlex.split(finished["next_commands"][0])[:4] == [
-        "./dev",
+        command_prefix,
         "final",
         "report",
         "submission",
@@ -87,7 +98,10 @@ def test_status_rejects_wrong_data_without_changing_plan(candidates):  # noqa: F
     assert not (directory / "predictions").exists()
 
 
-def test_standard_predictor_command_uses_existing_matching_source_and_shell_quotes(candidates):  # noqa: F811
+def test_standard_predictor_command_uses_existing_matching_source_and_shell_quotes(
+    candidates,  # noqa: F811
+    command_prefix,
+):
     root, data, _ = candidates
     config = init_experiment("Member One", "quoted experiment", root=root / "Members")
     experiment = Experiment(data, config, output_root=root / "Global/artifacts")
@@ -104,7 +118,7 @@ def test_standard_predictor_command_uses_existing_matching_source_and_shell_quot
     commands = summary["candidates"][0]["commands"]
     assert len(commands) == 1
     assert shlex.split(commands[0])[:6] == [
-        "./dev",
+        command_prefix,
         "exec",
         "--owner",
         "Member One",
@@ -115,8 +129,8 @@ def test_standard_predictor_command_uses_existing_matching_source_and_shell_quot
     config.with_name("predict.py").write_text("raise RuntimeError('Do not execute')")
     changed = final_plan_status(directory, data, root)
     restore, sync, predict = changed["candidates"][0]["commands"]
-    assert shlex.split(restore)[:2] == ["./dev", "restore"]
-    assert shlex.split(sync)[:3] == ["./dev", "env", "sync"]
-    assert shlex.split(predict)[:2] == ["./dev", "exec"]
+    assert shlex.split(restore)[:2] == [command_prefix, "restore"]
+    assert shlex.split(sync)[:3] == [command_prefix, "env", "sync"]
+    assert shlex.split(predict)[:2] == [command_prefix, "exec"]
     assert "final-" in predict
     assert not list(config.parent.parent.glob("final-*"))

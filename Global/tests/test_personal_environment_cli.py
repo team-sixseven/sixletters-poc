@@ -23,7 +23,7 @@ def workspace(tmp_path, monkeypatch):
 
 
 def invoke(monkeypatch, *args):
-    monkeypatch.setattr(sys, "argv", ["poc", *args])
+    monkeypatch.setattr(sys, "argv", ["dev", *args])
     return cli.main()
 
 
@@ -141,8 +141,8 @@ def test_environment_status_preserves_legacy_data_and_settings(workspace, monkey
     "context, container, gpu, prefix",
     [
         (None, None, None, ["./dev"]),
-        (None, "1", None, ["poc"]),
-        ("container", "1", "gpu", ["poc"]),
+        (None, "1", None, ["dev"]),
+        ("container", "1", "gpu", ["dev"]),
         ("host", "1", "cpu", ["./dev"]),
         ("host", "1", "gpu", ["./dev", "--gpu"]),
     ],
@@ -153,7 +153,7 @@ def test_exec_and_status_share_refresh_reason_and_complete_command(
     import shlex
 
     if context is None and container is None and Path("/opt/poc/dependencies.sha256").is_file():
-        prefix = ["poc"]
+        prefix = ["dev"]
     owner, name = "다른 팀원's", "실험 1"
     config = init_experiment(owner, name, root=workspace / "Members")
     active = personal_env.environment_directory(config.parent)
@@ -200,5 +200,5 @@ def test_notebook_refresh_error_has_actual_experiment_command(workspace, monkeyp
     import shlex
 
     command = capsys.readouterr().err.split("다음: ")[-1].strip()
-    assert shlex.split(command) == ["poc", "env", "sync", "실험 1", "--owner", "팀원", "--relock"]
+    assert shlex.split(command) == ["dev", "env", "sync", "실험 1", "--owner", "팀원", "--relock"]
     assert not (config.parent / "analysis.ipynb").exists()

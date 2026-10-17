@@ -27,7 +27,7 @@ def test_six_baselines_freeze_predict_report_and_restore(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "project_root", lambda: root)
 
     def command(*arguments):
-        monkeypatch.setattr(sys, "argv", ["poc", *arguments])
+        monkeypatch.setattr(sys, "argv", ["dev", *arguments])
         return cli.main()
 
     assert command("baselines", "baseline") == 0
@@ -94,14 +94,15 @@ def test_baselines_does_not_partially_create_when_any_name_exists(tmp_path, monk
     existing = root / "Members/Alice/experiments/base-rf-ecg"
     existing.mkdir(parents=True)
     monkeypatch.setattr(cli, "project_root", lambda: root)
-    monkeypatch.setattr(sys, "argv", ["poc", "baselines", "base"])
+    monkeypatch.setattr(sys, "argv", ["dev", "baselines", "base"])
     with pytest.raises(SystemExit):
         cli.main()
     assert list(existing.parent.iterdir()) == [existing]
 
 
+@pytest.mark.parametrize("context,prefix", [("host", "./dev"), ("container", "dev")])
 def test_printed_baseline_commands_execute_the_explicit_owner_with_spaces(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, context, prefix
 ):
     from sixletters import personal_env
 
@@ -111,9 +112,14 @@ def test_printed_baseline_commands_execute_the_explicit_owner_with_spaces(
     write_settings(root, "Alice", Path("Global/data/demo"))
     monkeypatch.setattr(cli, "project_root", lambda: root)
     owner = "Bob O'Neil"
-    monkeypatch.setattr(sys, "argv", ["poc", "baselines", "shared trial", "--owner", owner])
+    monkeypatch.setenv("SIXLETTERS_COMMAND_CONTEXT", context)
+    monkeypatch.setenv("SIXLETTERS_CONTAINER", "1")
+    monkeypatch.delenv("SIXLETTERS_COMMAND_GPU", raising=False)
+    monkeypatch.setattr(sys, "argv", ["dev", "baselines", "shared trial", "--owner", owner])
     assert cli.main() == 0
-    commands = [line for line in capsys.readouterr().out.splitlines() if line.startswith("./dev ")]
+    commands = [
+        line for line in capsys.readouterr().out.splitlines() if line.startswith(f"{prefix} ")
+    ]
     executed = []
 
     def execute(directory, script, arguments):
@@ -163,7 +169,7 @@ def test_interactive_freeze_accepts_one_candidate_without_weakening_comparison(
 
     monkeypatch.setattr(tracking, "list_remote_runs", lambda **kwargs: [entry])
     monkeypatch.setattr(reproduction, "fetch_archive", fetch)
-    arguments = ["poc", "final", "freeze", "single", "--limit", "1"]
+    arguments = ["dev", "final", "freeze", "single", "--limit", "1"]
     if source == "remote":
         arguments.append("--remote")
     monkeypatch.setattr(sys, "argv", arguments)

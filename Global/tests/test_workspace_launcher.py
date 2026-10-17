@@ -27,7 +27,11 @@ pytestmark = pytest.mark.skipif(os.name == "nt", reason="The host launcher runs 
             ],
         ),
         (["shell", "-c", "true"], ["exec", "-T", "gpu", "poc-container", "bash", "-c", "true"]),
-        (["compare"], ["exec", "-T", "gpu", "poc-container", "poc", "compare"]),
+        (["compare"], ["exec", "-T", "gpu", "poc-container", "dev", "compare"]),
+        (
+            ["status"],
+            ["exec", "-T", "gpu", "poc-container", "python", "-m", "sixletters", "status"],
+        ),
         (
             ["exec", "exp001", "fit.py", "--epochs", "2"],
             [
@@ -35,7 +39,7 @@ pytestmark = pytest.mark.skipif(os.name == "nt", reason="The host launcher runs 
                 "-T",
                 "gpu",
                 "poc-container",
-                "poc",
+                "dev",
                 "exec",
                 "exp001",
                 "fit.py",
@@ -45,13 +49,13 @@ pytestmark = pytest.mark.skipif(os.name == "nt", reason="The host launcher runs 
         ),
         (
             ["env", "add", "exp001", "optuna"],
-            ["exec", "-T", "gpu", "poc-container", "poc", "env", "add", "exp001", "optuna"],
+            ["exec", "-T", "gpu", "poc-container", "dev", "env", "add", "exp001", "optuna"],
         ),
-        (["sync"], ["exec", "-T", "gpu", "poc-container", "poc", "sync"]),
-        (["archive"], ["exec", "-T", "gpu", "poc-container", "poc", "archive"]),
+        (["sync"], ["exec", "-T", "gpu", "poc-container", "dev", "sync"]),
+        (["archive"], ["exec", "-T", "gpu", "poc-container", "dev", "archive"]),
         (
             ["compare", "--remote"],
-            ["exec", "-T", "gpu", "poc-container", "poc", "compare", "--remote"],
+            ["exec", "-T", "gpu", "poc-container", "dev", "compare", "--remote"],
         ),
         (
             ["music", "--cohort", "hrv", "--offline"],
@@ -60,7 +64,7 @@ pytestmark = pytest.mark.skipif(os.name == "nt", reason="The host launcher runs 
                 "-T",
                 "gpu",
                 "poc-container",
-                "poc",
+                "dev",
                 "music",
                 "--cohort",
                 "hrv",
@@ -127,9 +131,13 @@ def test_tools_select_running_gpu_service(tmp_path, arguments, expected):
     calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     operation = calls[-1]
     if expected[0] == "exec":
-        context = "host" if expected[4] == "poc" else "container"
+        context = "host" if arguments[0] == "status" or expected[4] == "dev" else "container"
+        skip_dependency_check = (
+            ["-e", "POC_SKIP_DEPENDENCY_CHECK=1"] if arguments[0] == "status" else []
+        )
         expected = [
             *expected[:2],
+            *skip_dependency_check,
             "-e",
             f"SIXLETTERS_COMMAND_CONTEXT={context}",
             "-e",

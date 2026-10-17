@@ -53,7 +53,7 @@ def test_final_status_does_not_migrate_legacy_data(tmp_path, monkeypatch):
     migration.write_text("raise AssertionError('must not migrate')")
     monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
     monkeypatch.setattr(
-        sys, "argv", ["poc", "final", "status", "missing", "--data", "Global/data/demo"]
+        sys, "argv", ["dev", "final", "status", "missing", "--data", "Global/data/demo"]
     )
     monkeypatch.setattr(cli.subprocess, "run", lambda *_a, **_kw: pytest.fail("migration"))
     monkeypatch.setattr(
@@ -79,7 +79,7 @@ def test_catalog_list_never_prompts_uploads_downloads_or_creates_plan(
 ):
     write_settings(tmp_path, "member", Path("Global/data/demo"))
     monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
-    monkeypatch.setattr(sys, "argv", ["poc", *arguments])
+    monkeypatch.setattr(sys, "argv", ["dev", *arguments])
     monkeypatch.setattr(cli, "prompt", lambda *_: pytest.fail("prompted"))
     monkeypatch.setattr(tracking, "list_remote_runs", lambda **_: [])
     monkeypatch.setattr(tracking, "fetch_runs", lambda *_a, **_k: pytest.fail("downloaded"))
@@ -98,7 +98,7 @@ def test_restore_selects_only_complete_archives_and_preserves_destination_owner(
         sys,
         "argv",
         [
-            "poc",
+            "dev",
             "restore",
             "retry001",
             "--remote",
@@ -147,7 +147,7 @@ def test_clone_cli_keeps_personal_code_and_new_identity(tmp_path, monkeypatch):
     config = init_experiment("member", "old", root=tmp_path / "Members", script="fit.py")
     config.with_name("helper.py").write_text("VALUE = 42\n")
     monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
-    monkeypatch.setattr(sys, "argv", ["poc", "new", "new", "--from", "old"])
+    monkeypatch.setattr(sys, "argv", ["dev", "new", "new", "--from", "old"])
     assert cli.main() == 0
     target = config.parent.parent / "new"
     assert target.joinpath("helper.py").read_text() == "VALUE = 42\n"

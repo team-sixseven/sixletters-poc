@@ -155,7 +155,7 @@ def assert_new_terminal_uses_project_environment(run, notebook_port):
         "assert sys.executable == '/opt/venv/bin/python', sys.executable; "
         f"print('JUPYTER_ENV_' + {nonce!r})"
     )
-    command = f"poc --help && python -c {shlex.quote(python_probe)}\n"
+    command = f"dev --help && python -c {shlex.quote(python_probe)}\n"
 
     async def check_terminal():
         connection = await websocket_connect(
@@ -175,9 +175,9 @@ def assert_new_terminal_uses_project_environment(run, notebook_port):
                     event = json.loads(message)
                     if event[0] == "stdout":
                         output += event[1]
-            assert "usage:" in output
+            assert "usage: dev " in output
         except TimeoutError:
-            pytest.fail(f"A fresh Jupyter terminal could not run poc and project Python:\n{output}")
+            pytest.fail(f"A fresh Jupyter terminal could not run dev and project Python:\n{output}")
         finally:
             connection.close()
 
@@ -294,13 +294,13 @@ def test_compose_up_starts_workspace_trains_and_preserves_results(docker_workspa
             "./dev",
             "shell",
             "-c",
-            "poc exec exp001 package_probe.py",
+            "dev exec exp001 package_probe.py",
             expected_returncode=2,
             error_output=True,
         )
         status = run("./dev", "env", "status", "exp001")
         assert "./dev env sync exp001 --owner '팀원 가' --relock" in host_error
-        assert "poc env sync exp001 --owner '팀원 가' --relock" in inner_error
+        assert "dev env sync exp001 --owner '팀원 가' --relock" in inner_error
         assert "./dev" not in inner_error
         assert "./dev env sync exp001 --owner '팀원 가' --relock" in status
     finally:

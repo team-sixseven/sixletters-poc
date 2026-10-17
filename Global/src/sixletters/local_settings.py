@@ -50,7 +50,7 @@ def read_settings(root: Path) -> dict[str, str]:
     if set(settings) != {"owner", "data"} or any(
         not isinstance(value, str) or not value.strip() for value in settings.values()
     ):
-        raise ValueError(f"Invalid {SETTINGS_FILE}; use poc init to register owner and data")
+        raise ValueError(f"Invalid {SETTINGS_FILE}; use dev init to register owner and data")
     settings["owner"] = validate_component(settings["owner"], "owner")
     settings["data"] = _relative_data(root, Path(settings["data"]))
     return settings
@@ -80,5 +80,5 @@ def write_settings(root: Path, owner: str, data: Path) -> Path:
 def configured_data(root: Path) -> Path:
     settings = read_settings(root)
     if "data" not in settings:
-        raise ValueError("Specify --data or register a data path with poc init first")
+        raise ValueError("Specify --data or register a data path with dev init first")
     return root / settings["data"]

@@ -13,7 +13,7 @@
 
 Windows는 **WSL2 Ubuntu·Git·Docker Compose 2.40.3 이상**을 준비한다. [설치·접근 확인](Global/docs/development.md#1-wsl2와-docker-확인)
 
-아래 명령은 **Ubuntu 터미널**에서 실행한다. macOS는 macOS 터미널과 CPU 환경을 사용한다. `yourname`·`이슈번호`·이메일은 본인 값으로 바꾼다. JupyterLab의 **Launcher → Terminal**에서는 `./dev` 대신 `poc`으로 데이터 준비·학습·비교를 실행한다. 별도 가상환경 활성화는 필요 없다.
+아래 명령은 **Ubuntu 터미널**에서 실행한다. macOS는 macOS 터미널과 CPU 환경을 사용한다. `yourname`·`이슈번호`·이메일은 본인 값으로 바꾼다. JupyterLab의 **Launcher → Terminal**에서는 `./dev` 대신 `dev`로 데이터 준비·학습·비교를 실행한다. 별도 가상환경 활성화는 필요 없다.
 
 ```sh
 mkdir -p ~/projects
