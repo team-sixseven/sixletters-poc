@@ -284,6 +284,45 @@ def main() -> int:
     restore_source.add_argument(
         "--remote", action="store_true", help="Select a complete archive from the server"
     )
+    final = subparsers.add_parser(
+        "final", help="Freeze candidates before test inference, then create the final report"
+    )
+    final_actions = final.add_subparsers(dest="final_action", required=True)
+    freeze = final_actions.add_parser(
+        "freeze", help="Snapshot selected models and validation-derived thresholds"
+    )
+    freeze.add_argument("name", help="New final evaluation plan name")
+    freeze.add_argument("--runs", type=Path, nargs="+")
+    freeze.add_argument(
+        "--remote",
+        action="store_true",
+        help="Select archived candidates from the shared MLflow server",
+    )
+    freeze.add_argument(
+        "--run-ids", nargs="+", help="Exact server run IDs with complete model archives"
+    )
+    _catalog_options(freeze)
+    freeze.add_argument("--data", type=Path)
+    freeze.add_argument(
+        "--threshold",
+        type=float,
+        help="Predeclared cutoff; otherwise choose Youden J on validation",
+    )
+    freeze.add_argument(
+        "--reference", help="Selected local run ID used for paired performance differences"
+    )
+    report = final_actions.add_parser(
+        "report", help="Create test metrics, paired intervals and figures after all predictions"
+    )
+    report.add_argument("name")
+    report.add_argument("--data", type=Path)
+    report.add_argument("--repeats", type=int, default=2000)
+    report.add_argument("--seed", type=int, default=42)
+    final_status = final_actions.add_parser(
+        "status", help="Show frozen candidates and remaining prediction steps"
+    )
+    final_status.add_argument("name")
+    final_status.add_argument("--data", type=Path)
     environment = subparsers.add_parser(
         "env", help="Manage member packages and optional isolated experiments"
     )
@@ -380,7 +419,9 @@ def main() -> int:
             "--from copies the source settings; edit the copy instead of using template options"
         )
     filters = {}
-    if args.command in ("compare", "archive", "restore"):
+    if args.command in ("compare", "archive", "restore") or (
+        args.command == "final" and args.final_action == "freeze"
+    ):
         filters = {
             key: getattr(args, key)
             for key in ("owner", "dataset", "feature_set", "experiment", "limit")
@@ -416,6 +457,16 @@ def main() -> int:
             parser.error("prepare --csv requires --schema")
         if args.demo and args.schema is not None:
             parser.error("prepare --schema is only valid with --csv")
+    if args.command == "final" and args.final_action == "freeze":
+        if filters and (args.runs or args.run_ids):
+            parser.error("Use a candidate list or explicit runs, not both")
+        if args.runs and (args.remote or args.run_ids):
+            parser.error("Choose local --runs or remote candidates, not both")
+        if args.run_ids and (
+            len(set(args.run_ids)) != len(args.run_ids)
+            or any(not re.fullmatch("[0-9a-f]{32}", value) for value in args.run_ids)
+        ):
+            parser.error("--run-ids requires distinct 32-character server run IDs")
     try:
         root = project_root()
         for option in ("root", "data", "output", "run", "csv", "schema"):
@@ -527,6 +578,52 @@ def main() -> int:
             print(
                 "Review the saved execution arguments and source before running; restore does not execute code."
             )
+        elif args.command == "final":
+            from .final_evaluation import freeze_candidates, generate_final_report
+            from .local_settings import configured_data
+            from .reproduction import final_plan_status
+            from .run_catalog import show_final_status
+
+            name = validate_component(args.name, "final plan")
+            directory = root / "Global/artifacts/final" / name
+            data = args.data or configured_data(root)
+            if args.final_action == "freeze":
+                if args.remote or args.run_ids:
+                    from .reproduction import fetch_archive
+                    from .tracking import list_remote_runs
+
+                    if args.run_ids:
+                        selected = args.run_ids
+                    else:
+                        issues = []
+                        catalog = list_remote_runs(issues=issues)
+                        show_remote_issues(issues)
+                        selected = choose_remote_runs(
+                            catalog, minimum=1, archived_only=True, **filters
+                        )
+                    if args.list_only:
+                        return 0
+                    runs = [
+                        fetch_archive(root / "Global/artifacts/.restored", run_id)
+                        for run_id in selected
+                    ]
+                else:
+                    runs = args.runs or choose_runs(root / "Global/artifacts", minimum=1, **filters)
+                    if args.list_only:
+                        return 0
+                freeze_candidates(
+                    runs, data, directory, threshold=args.threshold, reference=args.reference
+                )
+                print(f"Frozen final plan: {directory}")
+                show_final_status(final_plan_status(directory, data, root))
+                print("Do not fit on test data or change candidates after inspecting test results.")
+            elif args.final_action == "status":
+                show_final_status(final_plan_status(directory, data, root))
+            else:
+                output = generate_final_report(
+                    directory, data, repeats=args.repeats, seed=args.seed
+                )
+                print(f"Final aggregate report: {output}")
         elif args.command in ("env", "exec"):
             from .personal_env import (
                 env_add,

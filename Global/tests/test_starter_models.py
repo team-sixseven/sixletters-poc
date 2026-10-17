@@ -3,13 +3,16 @@
 import json
 import pickle
 import runpy
+import shutil
 import sys
 import tomllib
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from sixletters import workspace
 from sixletters.contracts import Dataset
 from sixletters.data.demo import make_demo_dataset
 from sixletters.data.prepared import save_prepared_dataset
@@ -125,3 +128,19 @@ def test_bare_config_name_loads_personal_file_from_workspace_cwd(
     assert result["config_filename"] == "balanced.toml"
     assert result["training"]["parameters"][key] == value
     assert result_path.with_name("config.toml").read_bytes() == alternate.read_bytes()
+
+
+@pytest.mark.parametrize("script", ["train.py", "predict.py", "PREDICT.py", "final_eval.py"])
+def test_final_predictor_does_not_reserve_or_overwrite_personal_training_filename(
+    tmp_path, monkeypatch, script
+):
+    template = Path(workspace.__file__).resolve().parents[2] / "templates/experiment"
+    fake_global = tmp_path / "package/Global"
+    shutil.copytree(template, fake_global / "templates/experiment")
+    predictor = "# Final prediction example\n"
+    (fake_global / "templates/experiment/predict.py").write_text(predictor)
+    monkeypatch.setattr(workspace, "__file__", str(fake_global / "src/sixletters/workspace.py"))
+    config = init_experiment("Alice", "exp001", root=tmp_path / "Members", script=script)
+    assert "LogisticRegression" in config.with_name(script).read_text()
+    final_name = "final_eval.py" if script.casefold() == "predict.py" else "predict.py"
+    assert config.with_name(final_name).read_text() == predictor

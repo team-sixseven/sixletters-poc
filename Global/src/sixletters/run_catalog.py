@@ -668,3 +668,30 @@ def show_remote_issues(issues: list[dict]) -> None:
             print(f"  MLflow 실행 ID: {display_text(remote_id, 80)}")
         print(f"  원인: {display_text(issue.get('message', '확인 불가'), 240)}")
         print(f"  조치: {display_text(issue.get('action', '서버 관리자에게 확인하세요.'), 240)}")
+
+
+def show_final_status(summary: dict) -> None:
+    """Show progress and reviewed next steps without exposing test scores or labels."""
+    print(f"최종 평가: {display_text(summary['name'])}")
+    counts = summary["counts"]
+    print(
+        f"예측 기록 완료 {counts['complete']}개 | 미실행 {counts['missing']}개 | 확인 필요 {counts['invalid']}개"
+    )
+    for candidate in summary["candidates"]:
+        identity = " / ".join(
+            display_text(candidate[key]) for key in ("owner", "experiment", "run_id")
+        )
+        label = {"complete": "예측 기록 완료", "missing": "미실행", "invalid": "확인 필요"}[
+            candidate["status"]
+        ]
+        print(f"- {identity}: {label}")
+        print(f"  {display_text(candidate['message'], 400)}")
+        for command in candidate["commands"]:
+            print(f"  {command}")
+    if summary["report"]:
+        print(f"기존 보고서: {display_text(summary['report'], 400)}")
+    for command in summary["next_commands"]:
+        print(command)
+    print(
+        "명령은 자동 실행하지 않습니다. 고정된 후보를 재학습하거나 테스트 결과로 교체하지 마세요."
+    )

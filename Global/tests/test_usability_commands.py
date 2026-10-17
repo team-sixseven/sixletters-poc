@@ -51,6 +51,7 @@ def test_interactive_empty_input_retries_but_eof_fails(monkeypatch):
         ["compare", "--remote", "--list"],
         ["archive", "--list"],
         ["restore", "retry001", "--remote", "--list"],
+        ["final", "freeze", "planned", "--remote", "--list"],
     ],
 )
 def test_catalog_list_never_prompts_uploads_downloads_or_creates_plan(

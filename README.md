@@ -56,3 +56,12 @@ uv run --project Global poc new exp002 --from exp001
 ```
 
 저장은 서버 응답을 기다리지 않는다. `sync`는 점수·설정·예측 결과를 전송하고 실패 원인을 표시한다. 선택한 실행의 모델·재현 파일은 `archive`로 추가 업로드한다.
+
+## 최종 평가
+
+```sh
+uv run --project Global poc final freeze selected
+uv run --project Global poc final status selected
+```
+
+후보와 임계값을 고정한 후 상태 안내에 따라 저장 모델로 예측하고 `uv run --project Global poc final report selected`를 실행한다. 시험 결과를 보고 후보를 다시 선택하지 않는다.
