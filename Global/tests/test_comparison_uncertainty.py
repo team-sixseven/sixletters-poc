@@ -327,3 +327,76 @@ def test_compare_cli_preserves_selection_order_and_displays_saved_reference(
         assert table[f"{metric}_delta"].eq(0).all()
         assert table[f"{metric}_delta_ci_lower"].eq(0).all()
         assert table[f"{metric}_delta_ci_upper"].eq(0).all()
+
+
+@pytest.mark.parametrize("reference_kind", ["default", "saved", "server"])
+def test_remote_compare_cli_fetches_in_selected_order_and_distinguishes_reference_ids(
+    tmp_path, monkeypatch, capsys, reference_kind
+):
+    import sys
+
+    from test_tracking import FakeClient
+
+    from sixletters import __main__ as cli
+    from sixletters import tracking
+
+    monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
+    monkeypatch.delenv("MLFLOW_EXPERIMENT_NAME", raising=False)
+    runs = [completed_run(tmp_path / str(i), owner=f"member{i}") for i in range(2)]
+    client = FakeClient(tmp_path / "server")
+    monkeypatch.setattr(tracking, "_client", lambda _: client)
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "http://tracking.example:5000")
+    for run in runs:
+        assert tracking.auto_publish(run) == "uploaded"
+    listed = tracking.list_remote_runs()
+    by_owner = {entry["owner"]: entry for entry in listed}
+    chosen = [by_owner[owner] for owner in ("member1", "member0")]
+    identifiers = [entry["run_id"] for entry in chosen]
+    assert all(entry["run_id"] != entry["local_run_id"] for entry in chosen)
+    output = tmp_path / "remote-cli.csv"
+    cache = tmp_path / "cache"
+    arguments = [
+        "poc",
+        "compare",
+        "--remote",
+        "--run-ids",
+        *identifiers,
+        "--root",
+        str(cache),
+        "--output",
+        str(output),
+    ]
+    if reference_kind != "default":
+        field = "local_run_id" if reference_kind == "saved" else "run_id"
+        arguments += ["--reference", chosen[1][field]]
+    monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(sys, "argv", arguments)
+    monkeypatch.setattr(tracking, "list_remote_runs", lambda **_kw: pytest.fail("unexpected list"))
+    monkeypatch.setattr(cli, "prompt", lambda *_: pytest.fail("unexpected prompt"))
+    if reference_kind == "server":
+        with pytest.raises(SystemExit, match="2"):
+            cli.main()
+        assert not output.exists()
+        message = capsys.readouterr().err
+        assert "기준 실행을 선택한 결과에서 찾을 수 없습니다" in message
+        assert "MLflow 서버 ID가 아닌" in message
+    else:
+        assert cli.main() == 0
+        displayed = capsys.readouterr().out
+        table = pd.read_csv(output)
+        assert table.run_id.tolist() == [entry["local_run_id"] for entry in chosen]
+        expected = chosen[1 if reference_kind == "saved" else 0]
+        assert table.reference_run_id.eq(expected["local_run_id"]).all()
+        assert f"기준 실행: {expected['owner']} / exp001 / {expected['local_run_id']}" in displayed
+        assert table.delta_ci_method.eq("paired_stratified_patient_percentile_bootstrap").all()
+    assert len(client.downloads) == 6
+    assert set(client.downloads) == {
+        "bundle/manifest.json",
+        "bundle/result.json",
+        "bundle/predictions.csv",
+    }
+    assert sorted(path.name for path in cache.glob(".remote/*/*") if path.is_dir()) == sorted(
+        identifiers
+    )
+    # A comparison never publishes another run or requests an archived model.
+    assert client.create_count == 2

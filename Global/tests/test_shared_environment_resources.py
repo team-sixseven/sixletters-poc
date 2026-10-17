@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import tomllib
 
 import pandas as pd
 import pytest
@@ -11,6 +12,7 @@ from sixletters import personal_env
 from sixletters.data.demo import make_demo_dataset
 from sixletters.data.prepared import save_prepared_dataset
 from sixletters.experiment import Experiment
+from sixletters.reproduction import restore_run
 from sixletters.workspace import init_experiment
 
 
@@ -113,6 +115,52 @@ def test_active_package_metadata_cannot_be_used_as_model_export(workspace):
     with pytest.raises(ValueError, match="active package environment files"):
         save(workspace, model=owner / "environment.json")
     assert not list((root / "artifacts").rglob("result.json"))
+
+
+@pytest.mark.parametrize("marker", [None, "shared"])
+def test_restore_shared_package_snapshot_isolates_without_touching_destination_owner(
+    workspace, marker
+):
+    root, config, data, _ = workspace
+    expected = package_files(config.parent.parent.parent)
+    if marker:
+        (config.parent / "environment.toml").write_text(f'scope = "{marker}"\n')
+    run = save(workspace)
+    original_result = (run / "result.json").read_bytes()
+    destination_owner = root / "Members/Bob"
+    destination_packages = package_files(destination_owner, version="7.0.0")
+    restored = restore_run(run, owner="Bob", name="copy", root=root / "Members", data=data)
+    assert snapshot(restored.parent) == expected
+    assert personal_env.environment_directory(restored.parent) == restored.parent
+    assert tomllib.loads((restored.parent / "environment.toml").read_text()) == {
+        "scope": "isolated"
+    }
+    assert snapshot(destination_owner) == destination_packages
+    assert (run / "result.json").read_bytes() == original_result
+    if marker:
+        original = restored.parent / "outputs/.restore/original_environment.toml"
+        assert original.read_bytes() == b'scope = "shared"\n'
+    following = save((root, restored, data, workspace[3]))
+    assert snapshot(following / "resources") == expected
+
+
+@pytest.mark.parametrize("content", [b"personal-package>=1\n", b"# comment\n\n", b"", None])
+def test_restoration_does_not_inherit_receiving_members_packages(workspace, content):
+    root, config, data, _ = workspace
+    owner = config.parent.parent.parent
+    if content is not None:
+        (owner / "requirements.in").write_bytes(content)
+    run = save(workspace)
+    destination_packages = package_files(root / "Members/Bob", version="7.0.0")
+    restored = restore_run(run, owner="Bob", name="copy", root=root / "Members", data=data)
+    assert personal_env.environment_directory(restored.parent) == restored.parent
+    assert snapshot(root / "Members/Bob") == destination_packages
+    if not content or content.startswith(b"#"):
+        assert not (restored.parent / "requirements.lock").exists()
+        assert not (restored.parent / ".venv").exists()
+        following = save((root, restored, data, workspace[3]))
+        result = json.loads((following / "result.json").read_text())
+        assert "personal-package" not in result["software"]["packages"]
 
 
 def test_equivalent_runtime_may_use_managed_lock_without_matching_venv_path(workspace):

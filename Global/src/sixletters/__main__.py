@@ -3,6 +3,7 @@
 import argparse
 import json
 import math
+import re
 import shlex
 import sys
 from datetime import UTC, datetime
@@ -10,7 +11,14 @@ from pathlib import Path
 from uuid import uuid4
 
 from .local_settings import project_root, read_settings, resolve_workspace_path, write_settings
-from .run_catalog import display_text, filter_run_catalog, local_entry, show_run_catalog
+from .run_catalog import (
+    display_text,
+    filter_run_catalog,
+    local_entry,
+    show_remote_issues,
+    show_run_catalog,
+    show_sync_summary,
+)
 from .workspace import init_experiment, validate_component, validate_experiment_identity
 
 
@@ -125,12 +133,23 @@ def choose_runs(
         try:
             result = json.loads(path.read_text(encoding="utf-8"))
             entry = local_entry(result, path)
+            from .tracking import local_archive_status
+
+            entry.update(
+                archive_status=local_archive_status(path.parent),
+                archive_status_source="local_record",
+            )
         except (ValueError, KeyError, TypeError, OSError):
             print(f"Skipping incomplete result: {display_text(path, 240)}", file=sys.stderr)
             continue
         entries.append(entry)
     selected = _catalog_selection(entries, archive=archive, **filters)
     return [Path(entry["path"]) for entry in selected]
+
+
+def choose_remote_runs(runs: list[dict], **filters) -> list[str]:
+    """Choose shared run IDs from metadata before downloading prediction files."""
+    return [entry["run_id"] for entry in _catalog_selection(runs, **filters)]
 
 
 def _positive_count(value: str) -> int:
@@ -240,6 +259,7 @@ def main() -> int:
     local.add_argument("--data", type=Path)
     new = subparsers.add_parser("new", help="Create a personal experiment using the local owner")
     new.add_argument("name")
+    new.add_argument("--from", dest="source", help="Copy existing experiment code and settings")
     new.add_argument("--owner")
     new.add_argument("--script", help="Filename of the editable Python example")
     new.add_argument("--feature-set", choices=("clinical", "ecg", "combined"))
@@ -249,6 +269,21 @@ def main() -> int:
     )
     baselines.add_argument("prefix", nargs="?", default="baseline")
     baselines.add_argument("--owner")
+    restore = subparsers.add_parser(
+        "restore", help="Restore selected reproduction files into a new personal experiment"
+    )
+    restore.add_argument("name", help="New experiment name")
+    restore.add_argument("--owner")
+    restore.add_argument("--data", type=Path)
+    _catalog_options(restore, destination_owner=True)
+    restore_source = restore.add_mutually_exclusive_group()
+    restore_source.add_argument("--run", type=Path, help="Complete local run directory")
+    restore_source.add_argument(
+        "--run-id", help="Server run ID with completed reproduction archive"
+    )
+    restore_source.add_argument(
+        "--remote", action="store_true", help="Select a complete archive from the server"
+    )
     environment = subparsers.add_parser(
         "env", help="Manage member packages and optional isolated experiments"
     )
@@ -291,6 +326,14 @@ def main() -> int:
         action="store_true",
         help="Use the verified local CSV cache without downloading",
     )
+    sync = subparsers.add_parser("sync", help="Retry completed local results to the shared server")
+    sync.add_argument("--root", type=Path, help="Local artifacts root")
+    archive = subparsers.add_parser(
+        "archive", help="Upload models and reproduction files for one selected local run"
+    )
+    archive.add_argument("--run", type=Path, help="Completed local run directory")
+    archive.add_argument("--root", type=Path, help="Search local runs here when --run is omitted")
+    _catalog_options(archive)
     prepare = subparsers.add_parser(
         "prepare", help="Save reviewed common inputs and patient splits"
     )
@@ -316,28 +359,58 @@ def main() -> int:
         help="experiments: methods on one input group; inputs: input groups with one fixed method",
     )
     compare.add_argument("--runs", type=Path, nargs="+")
+    compare.add_argument(
+        "--run-ids", nargs="+", help="Compare these exact server run IDs with --remote"
+    )
     compare.add_argument("--output", type=Path)
     compare.add_argument(
         "--reference",
         help="기준으로 삼을 저장된 실행 ID(목록의 이름/실험명 뒤 ID). 생략하면 첫 선택 실행",
     )
-    compare.add_argument("--root", type=Path, help="Local result root")
+    compare.add_argument(
+        "--root", type=Path, help="Local result root; with --remote, cache downloaded results here"
+    )
+    compare.add_argument(
+        "--remote", action="store_true", help="Select completed shared server runs"
+    )
     _catalog_options(compare)
     args = parser.parse_args()
+    if args.command == "new" and args.source and (args.script or args.feature_set or args.model):
+        parser.error(
+            "--from copies the source settings; edit the copy instead of using template options"
+        )
     filters = {}
-    if args.command in ("compare",):
+    if args.command in ("compare", "archive", "restore"):
         filters = {
             key: getattr(args, key)
             for key in ("owner", "dataset", "feature_set", "experiment", "limit")
             if getattr(args, key, None) is not None
         }
+        if args.command == "restore":
+            filters.pop("owner", None)
+            if args.source_owner:
+                filters["owner"] = args.source_owner
         if args.list_only:
             filters["list_only"] = True
         if args.command == "compare":
+            if args.remote and args.runs:
+                parser.error("compare --remote cannot be combined with local --runs")
             if args.runs and args.root:
                 parser.error("compare accepts either --runs or --root, not both")
-            if filters and args.runs:
-                parser.error("Use filters for the run list, or explicit --runs, not both")
+            if args.run_ids and (not args.remote):
+                parser.error("compare --run-ids requires --remote; use --runs for local paths")
+            if args.run_ids and (
+                len(args.run_ids) < 2
+                or len(set(args.run_ids)) != len(args.run_ids)
+                or any(not re.fullmatch("[0-9a-f]{32}", value) for value in args.run_ids)
+            ):
+                parser.error("--run-ids requires at least two distinct 32-character server run IDs")
+            if filters and (args.runs or args.run_ids):
+                parser.error("Use filters for the run list, or explicit --runs/--run-ids, not both")
+        elif args.command == "archive" and args.run and (args.root or filters):
+            parser.error("archive --run cannot be combined with --root or list filters")
+        elif args.command == "restore" and (args.run or args.run_id) and filters:
+            parser.error("Use a restore list or an explicit run, not both")
     if args.command == "prepare":
         if args.csv and args.schema is None:
             parser.error("prepare --csv requires --schema")
@@ -361,6 +434,14 @@ def main() -> int:
             owner = args.owner or read_settings(root).get("owner")
             if not owner:
                 raise ValueError("Register your name with poc init or pass --owner")
+            if args.source:
+                from .workspace import clone_experiment
+
+                source = personal_experiment(root, owner, args.source)
+                path = clone_experiment(source, owner, args.name, root=root / "Members")
+                print(f"실험 복제 완료: {path.parent}")
+                print("복사한 학습 파일·설정을 확인하고 poc exec로 실행하세요.")
+                return 0
             show_experiment(
                 init_experiment(
                     owner,
@@ -395,6 +476,56 @@ def main() -> int:
                 print(shlex.join(command))
             print(
                 "Created six editable experiments. Run each command to train and save validation results."
+            )
+        elif args.command == "restore":
+            from .local_settings import configured_data
+            from .reproduction import fetch_archive, restore_run
+
+            owner = args.owner or read_settings(root).get("owner")
+            if not owner:
+                raise ValueError("Register your name with poc init or pass --owner")
+            if args.run or args.run_id:
+                source = args.run or fetch_archive(root / "Global/artifacts/.restored", args.run_id)
+            elif args.remote:
+                from .tracking import list_remote_runs
+
+                issues = []
+                catalog = list_remote_runs(issues=issues)
+                show_remote_issues(issues)
+                selected = choose_remote_runs(
+                    catalog,
+                    archive=True,
+                    archived_only=True,
+                    action="복원할 번호 하나를 입력",
+                    **filters,
+                )
+                if args.list_only:
+                    return 0
+                source = fetch_archive(root / "Global/artifacts/.restored", selected[0])
+            else:
+                selected = choose_runs(
+                    root / "Global/artifacts",
+                    archive=True,
+                    action="복원할 번호 하나를 입력",
+                    **filters,
+                )
+                if args.list_only:
+                    return 0
+                source = selected[0]
+            restored = restore_run(
+                source,
+                owner=owner,
+                name=args.name,
+                root=root / "Members",
+                data=args.data or configured_data(root),
+            )
+            print(f"Verified original run: {source}")
+            print(f"Restored experiment: {restored.parent}")
+            print(
+                "Model files: outputs/.restore/models/; original run details: outputs/.restore/trace.json"
+            )
+            print(
+                "Review the saved execution arguments and source before running; restore does not execute code."
             )
         elif args.command in ("env", "exec"):
             from .personal_env import (
@@ -449,6 +580,43 @@ def main() -> int:
             print(f"Patient counts and data checks: {path.with_name('report.json')}")
             print(f"처음 등록: poc init (준비된 {relative} 경로를 기본값으로 제시합니다.)")
             print("Personal settings and train.py are unchanged; training starts separately.")
+        elif args.command == "sync":
+            from .tracking import sync_runs
+
+            summary = sync_runs(args.root or root / "Global/artifacts")
+            show_sync_summary(summary)
+            if summary.get("disabled"):
+                print(
+                    "Set the shared MLflow connection variables in this shell, then run uv run --project Global poc sync."
+                )
+            elif summary.get("pending") or summary.get("invalid"):
+                return 1
+        elif args.command == "archive":
+            from .tracking import archive_run
+
+            selected = (
+                [args.run]
+                if args.run
+                else choose_runs(args.root or root / "Global/artifacts", archive=True, **filters)
+            )
+            if args.list_only:
+                return 0
+            run_dir = selected[0]
+            outcome = archive_run(run_dir)
+            if outcome == "disabled":
+                print(
+                    "Set the shared MLflow connection variables in this shell, then run uv run --project Global poc archive again."
+                )
+                return 1
+            if outcome == "pending":
+                print(
+                    "Model archive pending. Keep the local run and retry with uv run --project Global poc sync."
+                )
+                return 1
+            if outcome == "already_synced":
+                print("Model and reproduction files are already archived on the shared server.")
+            else:
+                print("Model and reproduction files uploaded to the existing MLflow run.")
         elif args.command == "prepare":
             from .data.prepared import import_csv_dataset, save_prepared_dataset
 
@@ -477,9 +645,27 @@ def main() -> int:
             artifact_root = args.root or root / "Global/artifacts"
             if args.reference is None and (not args.list_only):
                 print("처음 선택한 실행을 기준으로 점수 차이를 계산합니다.")
-            runs = args.runs or choose_runs(artifact_root, **filters)
-            if args.list_only:
-                return 0
+            if args.remote:
+                from .tracking import fetch_runs, list_remote_runs
+
+                issues = []
+                if args.run_ids:
+                    selected = args.run_ids
+                else:
+                    catalog = list_remote_runs(issues=issues)
+                    show_remote_issues(issues)
+                    selected = choose_remote_runs(catalog, **filters)
+                if args.list_only:
+                    return 0
+                shown_issues = list(issues)
+                try:
+                    runs = fetch_runs(artifact_root, run_ids=selected, issues=issues)
+                finally:
+                    show_remote_issues([issue for issue in issues if issue not in shown_issues])
+            else:
+                runs = args.runs or choose_runs(artifact_root, **filters)
+                if args.list_only:
+                    return 0
             timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
             output = (
                 args.output

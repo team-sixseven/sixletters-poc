@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from sixletters import __main__ as cli
+from sixletters import tracking
 from sixletters.run_catalog import filter_run_catalog
 
 
@@ -88,6 +89,189 @@ def test_timezones_ties_unknown_times_and_input_order_have_deterministic_order()
 def test_catalog_limit_requires_a_positive_integer(value):
     with pytest.raises(ValueError, match="1 이상"):
         filter_run_catalog([entry(1)], limit=value)
+
+
+def test_local_and_remote_filters_select_same_identity_and_print_omitted_count(
+    tmp_path, monkeypatch, capsys
+):
+    runs = [entry(1), entry(2), entry(3), entry(4, owner="another")]
+    locations = {item["local_run_id"]: write_local(tmp_path, item) for item in runs}
+    options = {"owner": "member", "dataset": "music-v1", "feature_set": "clinical", "limit": 2}
+    monkeypatch.setattr("builtins.input", lambda _: "2 1")
+    assert cli.choose_runs(tmp_path, **options) == [locations["local-002"], locations["local-003"]]
+    local_output = capsys.readouterr().out
+    assert cli.choose_remote_runs(runs, **options) == [entry(2)["run_id"], entry(3)["run_id"]]
+    remote_output = capsys.readouterr().out
+    for output in (local_output, remote_output):
+        assert "조건에 맞는 실행 3개 중 최근 2개 표시" in output
+        assert "--limit" in output
+        assert "local-001" not in output
+        assert "another" not in output
+        assert output.index("1. member / exp001 / local-003") < output.index(
+            "2. member / exp001 / local-002"
+        )
+    assert f"서버 실행 ID: {entry(3)['run_id']}" in remote_output
+
+
+@pytest.mark.parametrize("local", [False, True])
+@pytest.mark.parametrize("filters", [{"owner": "missing"}, {"dataset": "data/music-v1"}])
+def test_no_match_explains_filters_without_prompt_or_download(
+    tmp_path, monkeypatch, capsys, local, filters
+):
+    monkeypatch.setattr("builtins.input", lambda *_: pytest.fail("prompted"))
+    write_local(tmp_path, entry(1))
+    with pytest.raises(ValueError, match="dataset_id"):
+        if local:
+            cli.choose_runs(tmp_path, **filters)
+        else:
+            cli.choose_remote_runs([entry(1)], **filters)
+    assert "조건에 맞는 실행 0개" in capsys.readouterr().out
+
+
+def test_one_visible_run_prompts_to_widen_filters_and_does_not_auto_select(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda *_: pytest.fail("prompted"))
+    with pytest.raises(ValueError, match="--limit를 2 이상"):
+        cli.choose_remote_runs([entry(1), entry(2)], limit=1)
+
+
+def test_archive_uses_same_filters_but_allows_one_visible_run(tmp_path, monkeypatch):
+    write_local(tmp_path, entry(1))
+    latest = write_local(tmp_path, entry(2))
+    monkeypatch.setattr("builtins.input", lambda _: "1")
+    assert cli.choose_runs(tmp_path, archive=True, owner="member", limit=1) == [latest]
+
+
+@pytest.mark.parametrize("source", ["local", "remote", "archive"])
+@pytest.mark.parametrize("custom_root", [False, True])
+def test_cli_forwards_all_catalog_filters_to_requested_source(
+    tmp_path, monkeypatch, source, custom_root
+):
+    arguments = ["archive"] if source == "archive" else ["compare"]
+    if source == "remote":
+        arguments += ["--remote"]
+    result_root = tmp_path / ("reviewer-artifacts" if custom_root else "Global/artifacts")
+    if custom_root:
+        arguments += ["--root", str(result_root)]
+    arguments += [
+        "--owner",
+        "member",
+        "--dataset",
+        "music-v1",
+        "--feature-set",
+        "ecg",
+        "--limit",
+        "5",
+    ]
+    paths = [tmp_path / "one", tmp_path / "two"]
+    monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(sys, "argv", ["poc", *arguments])
+    calls = []
+
+    def select(value, **filters):
+        if source == "archive":
+            assert filters.pop("archive") is True
+        assert filters == {
+            "owner": "member",
+            "dataset": "music-v1",
+            "feature_set": "ecg",
+            "limit": 5,
+        }
+        assert value == (["metadata"] if source == "remote" else result_root)
+        calls.append("selected")
+        return ["a" * 32, "b" * 32] if source == "remote" else paths
+
+    monkeypatch.setattr(cli, "choose_runs", select)
+    monkeypatch.setattr(cli, "choose_remote_runs", select)
+    monkeypatch.setattr(tracking, "list_remote_runs", lambda **_kwargs: ["metadata"])
+
+    def fetch(root, *, run_ids, issues):
+        assert root == result_root
+        assert run_ids == ["a" * 32, "b" * 32]
+        return paths
+
+    monkeypatch.setattr(tracking, "fetch_runs", fetch)
+
+    def compare(runs, output, mode, reference):
+        assert reference is None
+        assert runs == paths
+        calls.append("compared")
+        return runs
+
+    def archive(path):
+        assert path == paths[0]
+        calls.append("archived")
+        return "uploaded"
+
+    monkeypatch.setattr("sixletters.run_catalog.compare_with_reference", compare)
+    monkeypatch.setattr(cli, "show_comparison_deltas", lambda _: None)
+    monkeypatch.setattr(tracking, "archive_run", archive)
+    assert cli.main() == 0
+    assert calls == ["selected", "archived" if source == "archive" else "compared"]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["compare", "--remote", "--runs", "one", "two"],
+        ["compare", "--run-ids", "a" * 32, "b" * 32],
+        ["compare", "--remote", "--run-ids", "a" * 32],
+        ["compare", "--remote", "--run-ids", "a" * 32, "a" * 32],
+        ["compare", "--remote", "--run-ids", "../unsafe", "b" * 32],
+        ["compare", "--runs", "one", "two", "--root", "elsewhere"],
+        ["compare", "--runs", "one", "two", "--owner", "member"],
+        ["compare", "--remote", "--run-ids", "a" * 32, "b" * 32, "--limit", "2"],
+        ["compare", "--limit", "0"],
+        ["compare", "--limit", "-1"],
+        ["compare", "--limit", "2.5"],
+        ["archive", "--run", "one", "--dataset", "music-v1"],
+        ["archive", "--limit", "0"],
+    ],
+)
+def test_invalid_or_ambiguous_cli_options_fail_before_any_io(monkeypatch, arguments):
+    monkeypatch.setattr(sys, "argv", ["poc", *arguments])
+    monkeypatch.setattr(cli, "project_root", lambda: pytest.fail("I/O before argument validation"))
+    with pytest.raises(SystemExit, match="2"):
+        cli.main()
+
+
+@pytest.mark.parametrize("custom_root", [False, True])
+def test_explicit_remote_ids_skip_listing_and_keep_order_for_full_validation(
+    tmp_path, monkeypatch, custom_root
+):
+    identifiers = ["b" * 32, "a" * 32]
+    paths = [tmp_path / identifier for identifier in identifiers]
+    result_root = tmp_path / ("reviewer-artifacts" if custom_root else "Global/artifacts")
+    arguments = ["poc", "compare", "--remote", "--run-ids", *identifiers, "--mode", "inputs"]
+    if custom_root:
+        arguments += ["--root", str(result_root)]
+    monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        arguments,
+    )
+    monkeypatch.setattr(tracking, "list_remote_runs", lambda **_kwargs: pytest.fail("listed"))
+    monkeypatch.setattr("builtins.input", lambda *_: pytest.fail("prompted"))
+    calls = []
+
+    def fetch(root, *, run_ids, issues):
+        assert root == result_root
+        assert run_ids == identifiers
+        calls.append("verified download")
+        return paths
+
+    def compare(runs, output, mode, reference):
+        assert reference is None
+        assert runs == paths and mode == "inputs"
+        assert calls == ["verified download"]
+        calls.append("full comparison")
+        return runs
+
+    monkeypatch.setattr(tracking, "fetch_runs", fetch)
+    monkeypatch.setattr("sixletters.run_catalog.compare_with_reference", compare)
+    monkeypatch.setattr(cli, "show_comparison_deltas", lambda _: None)
+    assert cli.main() == 0
+    assert calls == ["verified download", "full comparison"]
 
 
 def test_explicit_local_paths_still_skip_catalog_filters_and_keep_order(tmp_path, monkeypatch):
