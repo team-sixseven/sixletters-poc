@@ -19,7 +19,12 @@ from .run_catalog import (
     show_run_catalog,
     show_sync_summary,
 )
-from .workspace import init_experiment, validate_component, validate_experiment_identity
+from .workspace import (
+    init_experiment,
+    init_practice,
+    validate_component,
+    validate_experiment_identity,
+)
 
 
 def prompt(label: str, default: str | None = None) -> str:
@@ -323,11 +328,20 @@ def main() -> int:
     )
     final_status.add_argument("name")
     final_status.add_argument("--data", type=Path)
+    notebook = subparsers.add_parser(
+        "notebook", help="Prepare a personal notebook and package kernel"
+    )
+    notebook.add_argument("name", help="Existing experiment name")
+    notebook.add_argument("--owner")
+    notebook.add_argument(
+        "--file", default="analysis.ipynb", help="Notebook filename inside the experiment"
+    )
+    notebook.add_argument("--relock", action="store_true")
     environment = subparsers.add_parser(
         "env", help="Manage member packages and optional isolated experiments"
     )
     environment_actions = environment.add_subparsers(dest="env_action", required=True)
-    for action in ("add", "remove", "sync", "isolate", "share", "status"):
+    for action in ("add", "remove", "sync", "kernel", "isolate", "share", "status"):
         operation = environment_actions.add_parser(action)
         operation.add_argument("name", help="Personal experiment name")
         operation.add_argument("--owner")
@@ -352,6 +366,8 @@ def main() -> int:
     execute.add_argument(
         "script_args", nargs=argparse.REMAINDER, help="Arguments for your Python file"
     )
+    practice = subparsers.add_parser("practice", help="Create your MUSIC practice notebook")
+    practice.add_argument("--owner", help="Override the name registered by poc init")
     demo = subparsers.add_parser("demo", help="Prepare synthetic data for an execution check")
     demo.add_argument("--output", type=Path)
     music = subparsers.add_parser(
@@ -624,10 +640,19 @@ def main() -> int:
                     directory, data, repeats=args.repeats, seed=args.seed
                 )
                 print(f"Final aggregate report: {output}")
+        elif args.command == "notebook":
+            from .notebook_workspace import prepare_notebook
+
+            directory = personal_experiment(root, args.owner, args.name)
+            prepared = prepare_notebook(directory, filename=args.file, relock=args.relock)
+            print(f"노트북: {prepared['path'].relative_to(root).as_posix()}")
+            print(f"커널 연결 완료: {prepared['kernel']}")
+            print("JupyterLab에서 이 파일을 여세요. 기존에 열려 있으면 저장 후 다시 여세요.")
         elif args.command in ("env", "exec"):
             from .personal_env import (
                 env_add,
                 env_isolate,
+                env_kernel,
                 env_remove,
                 env_share,
                 env_status,
@@ -650,6 +675,11 @@ def main() -> int:
 
                 show_environment_status(env_status(directory))
                 return 0
+            if args.env_action == "kernel":
+                display, _ = env_kernel(directory, relock=args.relock)
+                print(f"JupyterLab → Kernel → Change Kernel → {display}")
+                print("패키지 변경 전에는 이 환경을 사용하는 모든 학습과 노트북 커널을 종료하세요.")
+                return 0
             if args.env_action == "add":
                 interpreter = env_add(directory, args.packages)
             elif args.env_action == "remove":
@@ -660,6 +690,16 @@ def main() -> int:
                     options["repair"] = True
                 interpreter = env_sync(directory, **options)
             print(f"Python: {interpreter}")
+        elif args.command == "practice":
+            owner = args.owner or read_settings(root).get("owner")
+            if not owner:
+                raise ValueError("Register your name with poc init or pass --owner")
+            path = init_practice(owner, root=root / "Members")
+            print(f"개인 실습 노트북: {path.relative_to(root).as_posix()}")
+            print("MUSIC 데이터가 없으면 poc music을 실행하세요.")
+            print(
+                "JupyterLab에서 노트북을 열고 Kernel → Restart Kernel and Run All Cells를 선택하세요."
+            )
         elif args.command == "demo":
             from .data.demo import make_demo_dataset
             from .data.prepared import save_prepared_dataset

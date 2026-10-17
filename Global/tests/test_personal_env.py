@@ -479,6 +479,44 @@ def test_empty_or_comments_only_legacy_input_does_not_create_separate_environmen
     assert pe.environment_resources(path) == {}
 
 
+def test_shared_execution_can_overlap_but_all_shared_mutations_are_blocked(isolated, monkeypatch):
+    _, experiment, _ = isolated
+    first, second = _shared(experiment, "first"), _shared(experiment, "second")
+    python = pe.env_add(first, ["poc-env-extra==1.0"])
+    for path in (first, second):
+        (path / "fit.py").write_text("import poc_env_extra\n")
+    real_run = pe.subprocess.run
+    active = False
+
+    def during_run(command, **kwargs):
+        nonlocal active
+        if (
+            str(command[0]) == str(python)
+            and str(command[1]) == str(first / "fit.py")
+            and not active
+        ):
+            active = True
+            try:
+                assert pe.execute_script(second, Path("fit.py"), []) == 0
+                pe.env_kernel(second)
+                for action in (
+                    lambda: pe.env_sync(second, repair=True),
+                    lambda: pe.env_add(second, ["poc-env-extra==2.0"]),
+                    lambda: pe.env_remove(second, ["poc-env-extra"]),
+                    lambda: pe.execute_script(first, Path("fit.py"), []),
+                ):
+                    with pytest.raises(ValueError, match="실행 중"):
+                        action()
+            finally:
+                active = False
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(pe.subprocess, "run", during_run)
+    assert pe.execute_script(first, Path("fit.py"), []) == 0
+    pe.env_add(second, ["poc-env-extra==2.0"])
+    assert _version(python, "poc-env-extra") == "2.0"
+
+
 def test_stale_reader_leases_do_not_block_packages(isolated):
     _, experiment, _ = isolated
     path = _shared(experiment)
@@ -702,6 +740,20 @@ def test_status_identifies_active_experiment_and_idempotent_sync_allows_other_re
     assert pe.env_status(second)["active"] == []
 
 
+def test_scope_changes_refresh_previously_registered_kernel(isolated):
+    _, experiment, _ = isolated
+    path = _shared(experiment)
+    owner = pe.environment_directory(path)
+    pe.env_add(path, ["poc-env-extra==1.0"])
+    _, specification = pe.env_kernel(path)
+    assert json.loads(specification.read_text())["argv"][0] == str(pe._python(owner / pe.ENV_DIR))
+    pe.env_isolate(path)
+    assert (path / pe.ENV_DIR).is_dir()
+    assert json.loads(specification.read_text())["argv"][0] == str(pe._python(path / pe.ENV_DIR))
+    pe.env_share(path)
+    assert json.loads(specification.read_text())["argv"][0] == str(pe._python(owner / pe.ENV_DIR))
+
+
 def test_status_returns_promptly_while_an_environment_update_holds_gate(isolated):
     _, experiment, _ = isolated
     path = _shared(experiment)
@@ -711,6 +763,25 @@ def test_status_returns_promptly_while_an_environment_update_holds_gate(isolated
     assert status["state"] == "update-needed"
     assert "완료될 때까지" in status["reason"]
     assert status["next_command"].startswith("uv run --project Global poc env status shared")
+
+
+def test_registering_existing_ready_kernel_is_a_read_only_noop_while_running(isolated):
+    _, experiment, _ = isolated
+    path = _shared(experiment)
+    pe.env_sync(path)
+    display, specification = pe.env_kernel(path)
+    before = specification.read_bytes()
+    active = pe.environment_directory(path)
+    with pe._experiment_locked(path):
+        with pe._locked(active):
+            lease = pe._lease(active, path, kind="kernel")
+        try:
+            assert pe.env_kernel(path) == (display, specification)
+            assert specification.read_bytes() == before
+            with pytest.raises(ValueError, match="Shut Down Kernel"):
+                pe.env_kernel(path, relock=True)
+        finally:
+            lease.release()
 
 
 @pytest.mark.parametrize("content", [None, "", "# Optional packages\n\n"])
@@ -788,6 +859,54 @@ def test_incomplete_saved_lock_is_not_bypassed_by_empty_input(isolated, record):
     (active / record).write_text("")
     with pytest.raises(ValueError, match="--relock"):
         pe.env_sync(path)
+
+
+@pytest.mark.parametrize("action", ["add", "sync", "exec", "kernel"])
+def test_first_personal_install_refreshes_registered_member_kernels_only(isolated, action):
+    _, experiment, _ = isolated
+    first, second = _shared(experiment, "first"), _shared(experiment, "second")
+    separate = experiment("isolated")
+    paths = {path: pe.env_kernel(path)[1] for path in (first, second, separate)}
+    assert all(json.loads(spec.read_text())["argv"][0] == sys.executable for spec in paths.values())
+    if action == "add":
+        python = pe.env_add(first, ["poc-env-extra==1.0"])
+    else:
+        (first.parent.parent / pe.INPUT_FILE).write_text("poc-env-extra==1.0\n")
+        if action == "sync":
+            python = pe.env_sync(first)
+        elif action == "exec":
+            (first / "fit.py").write_text("import poc_env_extra\n")
+            assert pe.execute_script(first, Path("fit.py"), []) == 0
+            python = pe._python(first.parent.parent / pe.ENV_DIR)
+        else:
+            _, current = pe.env_kernel(first)
+            python = Path(json.loads(current.read_text())["argv"][0])
+    assert python == pe._python(first.parent.parent / pe.ENV_DIR)
+    for path in (first, second):
+        spec = json.loads(paths[path].read_text())
+        assert spec["argv"][0] == str(python)
+        assert spec["argv"][-2:] == ["--runtime-prefix", str(first.parent.parent / pe.ENV_DIR)]
+    assert json.loads(paths[separate].read_text())["argv"][0] == sys.executable
+    assert not (separate / pe.ENV_DIR).exists()
+
+
+def test_common_kernel_requires_registered_prefix_and_holds_member_lease(isolated, monkeypatch):
+    _, experiment, _ = isolated
+    first, second = _shared(experiment, "first"), _shared(experiment, "second")
+    with pytest.raises(ValueError, match="등록된 SixSeven"):
+        pe.launch_kernel(first, Path("connection.json"), runtime_prefix=Path("/wrong/runtime"))
+    visited = []
+
+    def run(path, active, connection):
+        visited.append(path)
+        with pytest.raises(ValueError, match="first.*kernel"):
+            pe.env_add(second, ["poc-env-extra==1.0"])
+        assert pe.env_status(second)["active"][0]["kind"] == "kernel"
+
+    monkeypatch.setattr(pe, "_start_kernel", run)
+    pe.launch_kernel(first, Path("connection.json"), runtime_prefix=Path(sys.prefix))
+    assert visited == [first]
+    assert pe.env_status(second)["active"] == []
 
 
 def test_overlay_installs_only_missing_transitive_packages_and_reuses_shared_files(isolated):
@@ -1022,10 +1141,39 @@ def test_active_reader_refresh_guidance_waits_instead_of_relocking(isolated):
     with pe._running(first):
         (active / pe.INPUT_FILE).write_text("poc-env-extra==2.0\n")
         status = pe.env_status(second)
-        assert "Python 프로세스" in status["reason"]
+        assert "Shut Down Kernel" in status["reason"]
         assert "--relock" not in status["next_command"]
         assert "env status second" in status["next_command"]
         with pytest.raises(ValueError, match="실행 중") as error:
             pe.env_sync(second)
         assert "--relock" not in str(error.value)
     assert "--relock" in pe.env_status(second)["next_command"]
+
+
+def test_kernel_refresh_distinguishes_changed_records_from_broken_install(isolated):
+    _, experiment, _ = isolated
+    path = experiment()
+    pe.env_add(path, ["poc-env-extra==1.0"])
+    (path / pe.ENV_DIR / "pyvenv.cfg").unlink()
+    with pytest.raises(pe.EnvironmentRefreshError, match="--repair") as error:
+        pe._kernel_lease(path, path)
+    assert "--relock" not in str(error.value)
+    (path / pe.INPUT_FILE).write_text("poc-env-extra==2.0\n")
+    with pytest.raises(pe.EnvironmentRefreshError, match="--relock"):
+        pe._kernel_lease(path, path)
+
+
+def test_kernel_and_status_both_require_relock_after_shared_package_change(isolated):
+    root, experiment, baseline = isolated
+    path = experiment()
+    pe.env_add(path, ["poc-env-extra==1.0"])
+    metadata = root / "shared-site-packages/poc_env_base-1.0.dist-info/METADATA"
+    metadata.write_text(metadata.read_text().replace("Version: 1.0", "Version: 2.0"))
+    baseline["packages"]["poc-env-base"] = "2.0"
+    baseline["fingerprint"] = "base-v2"
+    with pytest.raises(pe.EnvironmentRefreshError, match="--relock") as error:
+        pe._kernel_lease(path, path)
+    assert "--repair" not in str(error.value)
+    status = pe.env_status(path)
+    assert status["reason"] == error.value.reason
+    assert status["next_command"] in str(error.value)

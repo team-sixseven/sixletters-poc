@@ -38,6 +38,39 @@ def cli(root, *args, **kwargs):
     return run(root, "-m", "sixletters", *args, **kwargs)
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--help"],
+        ["music", "--help"],
+        ["compare", "--help"],
+        ["init", "--owner", "팀원"],
+        ["new", "exp001", "--owner", "팀원"],
+        ["practice", "--owner", "팀원"],
+    ],
+)
+def test_setup_and_help_do_not_load_training_or_tracking_libraries(checkout, arguments):
+    script = """
+import sys
+
+class BlockHeavyImports:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {'numpy', 'pandas', 'scipy', 'sklearn', 'mlflow'}:
+            raise AssertionError(f'Unnecessary import for this command: {fullname}')
+
+sys.meta_path.insert(0, BlockHeavyImports())
+from sixletters.__main__ import main
+sys.argv = ['poc', *sys.argv[1:]]
+raise SystemExit(main())
+"""
+    completed = run(checkout, "-c", script, *arguments, input_text="\n")
+    assert completed.returncode == 0, completed.stderr
+    if arguments[0] == "init":
+        assert read_settings(checkout) == {"owner": "팀원", "data": "Global/data/prepared/demo-v1"}
+    elif arguments[0] == "new":
+        assert (checkout / "Members/팀원/experiments/exp001/train.py").is_file()
+
+
 def test_init_new_and_data_location_survive_ide_working_directory(checkout):
     assert cli(checkout, "demo").returncode == 0
     completed = cli(checkout, "init", input_text="팀원 가\n\n")
