@@ -140,11 +140,11 @@ def test_environment_status_preserves_legacy_data_and_settings(workspace, monkey
 @pytest.mark.parametrize(
     "context, container, gpu, prefix",
     [
-        (None, None, None, ["./poc"]),
+        (None, None, None, ["./dev"]),
         (None, "1", None, ["poc"]),
         ("container", "1", "gpu", ["poc"]),
-        ("host", "1", "cpu", ["./poc"]),
-        ("host", "1", "gpu", ["./poc", "--gpu"]),
+        ("host", "1", "cpu", ["./dev"]),
+        ("host", "1", "gpu", ["./dev", "--gpu"]),
     ],
 )
 def test_exec_and_status_share_refresh_reason_and_complete_command(

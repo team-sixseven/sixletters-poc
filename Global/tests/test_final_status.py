@@ -54,7 +54,7 @@ def test_status_reports_partial_completion_and_all_complete_next_command(candida
     finished = final_plan_status(directory, data, root)
     assert finished["counts"] == {"complete": 2, "missing": 0, "invalid": 0}
     assert shlex.split(finished["next_commands"][0])[:4] == [
-        "./poc",
+        "./dev",
         "final",
         "report",
         "submission",
@@ -104,7 +104,7 @@ def test_standard_predictor_command_uses_existing_matching_source_and_shell_quot
     commands = summary["candidates"][0]["commands"]
     assert len(commands) == 1
     assert shlex.split(commands[0])[:6] == [
-        "./poc",
+        "./dev",
         "exec",
         "--owner",
         "Member One",
@@ -115,8 +115,8 @@ def test_standard_predictor_command_uses_existing_matching_source_and_shell_quot
     config.with_name("predict.py").write_text("raise RuntimeError('Do not execute')")
     changed = final_plan_status(directory, data, root)
     restore, sync, predict = changed["candidates"][0]["commands"]
-    assert shlex.split(restore)[:2] == ["./poc", "restore"]
-    assert shlex.split(sync)[:3] == ["./poc", "env", "sync"]
-    assert shlex.split(predict)[:2] == ["./poc", "exec"]
+    assert shlex.split(restore)[:2] == ["./dev", "restore"]
+    assert shlex.split(sync)[:3] == ["./dev", "env", "sync"]
+    assert shlex.split(predict)[:2] == ["./dev", "exec"]
     assert "final-" in predict
     assert not list(config.parent.parent.glob("final-*"))

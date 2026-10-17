@@ -2,7 +2,7 @@
 
 ## 1. MUSIC 다운로드부터 환자 분할까지
 
-Jupyter 또는 컨테이너 터미널에서 실행한다. Ubuntu 터미널에서는 `poc` 대신 `./poc`을 사용한다.
+Jupyter 또는 컨테이너 터미널에서 실행한다. Ubuntu 터미널에서는 `poc` 대신 `./dev`를 사용한다.
 
 ```sh
 poc music

@@ -282,8 +282,8 @@ def _validate_environment_runtime(resources: dict[str, bytes], software: dict) -
     except (KeyError, ValueError, TypeError, AttributeError) as error:
         raise ValueError(
             "The active package lock does not match this Python environment. "
-            "Run the script with ./poc exec, or select its registered SixSeven notebook "
-            "kernel; synchronize changed package files with ./poc env sync first."
+            "Run the script with ./dev exec, or select its registered SixSeven notebook "
+            "kernel; synchronize changed package files with ./dev env sync first."
         ) from error
 
 

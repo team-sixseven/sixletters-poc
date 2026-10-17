@@ -758,7 +758,7 @@ def _env_command(experiment: Path, action: str, *options: str) -> str:
         os.environ.get("SIXLETTERS_CONTAINER") == "1"
         or Path("/opt/poc/dependencies.sha256").is_file()
     )
-    command = ["poc" if context != "host" and in_container else "./poc"]
+    command = ["poc" if context != "host" and in_container else "./dev"]
     if context == "host" and os.environ.get("SIXLETTERS_COMMAND_GPU") == "gpu":
         command.append("--gpu")
     command.extend(["env", action, experiment.name])

@@ -18,7 +18,7 @@ def check_gpu() -> dict:
         import torch
     except ImportError as exc:
         raise RuntimeError(
-            "PyTorch가 없습니다. ./poc build --gpu로 GPU 이미지를 준비하세요."
+            "PyTorch가 없습니다. ./dev build --gpu로 GPU 이미지를 준비하세요."
         ) from exc
     if not torch.cuda.is_available():
         raise RuntimeError(

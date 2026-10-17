@@ -8,7 +8,7 @@ def test_workspace_copy_excludes_existing_results_and_keeps_execution_files(tmp_
     workspace = tmp_path / "isolated checkout"
     required = {
         "compose.yaml": "services: {}\n",
-        "poc": "#!/bin/sh\n",
+        "dev": "#!/bin/sh\n",
         "Global/Dockerfile": "FROM python:3.12\n",
         "Global/pyproject.toml": "[project]\n",
         "Global/uv.lock": "version = 1\n",

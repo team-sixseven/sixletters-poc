@@ -460,7 +460,7 @@ def _prediction_steps(
             [
                 shlex.join(
                     [
-                        "./poc",
+                        "./dev",
                         "exec",
                         "--owner",
                         owner,
@@ -491,7 +491,7 @@ def _prediction_steps(
     commands = [
         shlex.join(
             [
-                "./poc",
+                "./dev",
                 "restore",
                 restored_name,
                 "--owner",
@@ -502,13 +502,13 @@ def _prediction_steps(
                 data_path,
             ]
         ),
-        shlex.join(["./poc", "env", "sync", restored_name, "--owner", target_owner]),
+        shlex.join(["./dev", "env", "sync", restored_name, "--owner", target_owner]),
     ]
     if template_matches:
         commands.append(
             shlex.join(
                 [
-                    "./poc",
+                    "./dev",
                     "exec",
                     "--owner",
                     target_owner,
@@ -591,7 +591,7 @@ def final_plan_status(plan_directory: Path, data: Path, root: Path) -> dict:
     if candidates and counts["complete"] == len(candidates) and not report.exists():
         commands.append(
             shlex.join(
-                ["./poc", "final", "report", directory.name, "--data", _status_path(data, root)]
+                ["./dev", "final", "report", directory.name, "--data", _status_path(data, root)]
             )
         )
     if _plan(directory) != plan:

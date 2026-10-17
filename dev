@@ -23,7 +23,7 @@ fi
 case "$command" in
     help|-h|--help)
         cat <<'HELP'
-사용법: ./poc <작업> [--gpu] [인자]
+사용법: ./dev <작업> [--gpu] [인자]
 
   up -d --wait       이미지·환경 점검 후 백그라운드에서 Jupyter 시작
   down               작업 공간 종료 (코드·데이터·결과는 유지)
@@ -55,15 +55,15 @@ case "$command" in
   compare [--remote] 로컬 또는 공용 서버에서 비교할 실험 결과 선택
   tracking <작업>    공용 서버 up/down/logs/status/user (서버 운영 장비에서)
 
-학습: ./poc exec exp001 train.py 또는 ./poc shell 안에서 poc exec exp001 train.py
-GPU: ./poc up --gpu -d --wait
-프로젝트 명령 도움말: ./poc <명령> --help
+학습: ./dev exec exp001 train.py 또는 ./dev shell 안에서 poc exec exp001 train.py
+GPU: ./dev up --gpu -d --wait
+프로젝트 명령 도움말: ./dev <명령> --help
 HELP
         exit 0
         ;;
     hooks)
         if [ "$#" -ne 0 ]; then
-            echo '사용법: ./poc hooks' >&2
+            echo '사용법: ./dev hooks' >&2
             exit 2
         fi
         current_hooks=$(git config --get core.hooksPath || true)
@@ -101,13 +101,13 @@ if [ "$command" = tracking ]; then
         status) tracking_compose ps "$@" ;;
         user)
             if [ "$#" -ne 1 ]; then
-                echo '사용법: ./poc tracking user <계정명>' >&2
+                echo '사용법: ./dev tracking user <계정명>' >&2
                 exit 2
             fi
             tracking_compose exec tracking python /opt/tracking/start_tracking_server.py user "$1"
             ;;
         *)
-            echo '사용법: ./poc tracking <up|down|logs|status|user 계정명>' >&2
+            echo '사용법: ./dev tracking <up|down|logs|status|user 계정명>' >&2
             exit 2
             ;;
     esac
@@ -162,7 +162,7 @@ case "$command" in
     status)
         compose ps
         if [ -z "$(compose ps --status running --quiet "$service")" ]; then
-            echo '작업 환경이 꺼져 있습니다. 다음: ./poc up -d --wait (GPU: --gpu)'
+            echo '작업 환경이 꺼져 있습니다. 다음: ./dev up -d --wait (GPU: --gpu)'
             exit 0
         fi
         # A stale image must still be able to explain why it needs rebuilding.
@@ -170,9 +170,9 @@ case "$command" in
             -e SIXLETTERS_COMMAND_GPU="$service" "$service" poc-container poc status "$@"
         ;;
     url)
-        if [ "$#" -ne 0 ]; then echo '사용법: ./poc url' >&2; exit 2; fi
+        if [ "$#" -ne 0 ]; then echo '사용법: ./dev url' >&2; exit 2; fi
         if [ -z "$(compose ps --status running --quiet "$service")" ]; then
-            echo '작업 환경을 먼저 시작하세요: ./poc up -d --wait' >&2
+            echo '작업 환경을 먼저 시작하세요: ./dev up -d --wait' >&2
             exit 2
         fi
         echo '아래 토큰은 개인 접속용입니다. 공유 문서·PR에 복사하지 마세요.'
@@ -194,7 +194,7 @@ case "$command" in
                     --locked --no-dev --no-emit-project --output-file Global/requirements.txt "$@"
                 ;;
             *)
-                echo '사용법: ./poc deps <add|remove|lock|export> [uv 인자]' >&2
+                echo '사용법: ./dev deps <add|remove|lock|export> [uv 인자]' >&2
                 exit 2
                 ;;
         esac
@@ -214,7 +214,7 @@ case "$command" in
         ;;
     up)
         compose up --build "$service" "$@"
-        echo 'Jupyter 접속 주소·토큰: ./poc url | 상태 확인: ./poc status'
+        echo 'Jupyter 접속 주소·토큰: ./dev url | 상태 확인: ./dev status'
         ;;
     notebook)
         if [ "$#" -eq 0 ]; then

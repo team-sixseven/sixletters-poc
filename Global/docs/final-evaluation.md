@@ -17,23 +17,23 @@
 임상 / ECG / 결합 입력마다 로지스틱 회귀(LR)와 랜덤 포레스트(RF)를 비교한다. 다음 명령은 등록한 이름 아래에 편집 가능한 개인 실험 6개를 만들며, 학습은 시작하지 않는다.
 
 ```sh
-./poc baselines
+./dev baselines
 ```
 
 생성 후 필요한 실험을 각각 실행한다. 팀원끼리 나누어 실행해도 공통 데이터·분할과 비교할 모델의 코드·설정은 같게 유지한다.
 
 ```sh
-./poc exec baseline-lr-clinical train.py
-./poc exec baseline-lr-ecg train.py
-./poc exec baseline-lr-combined train.py
-./poc exec baseline-rf-clinical train.py
-./poc exec baseline-rf-ecg train.py
-./poc exec baseline-rf-combined train.py
+./dev exec baseline-lr-clinical train.py
+./dev exec baseline-lr-ecg train.py
+./dev exec baseline-lr-combined train.py
+./dev exec baseline-rf-clinical train.py
+./dev exec baseline-rf-ecg train.py
+./dev exec baseline-rf-combined train.py
 ```
 
-LR·RF 모두 학습 환자에서 결측치를 처리하고 범주형 변수를 변환하며, `class_weight="balanced"`로 적은 클래스에 더 큰 가중치를 준다. LR에는 표준화도 포함한다. 각 `train.py`·`config.toml`은 자유롭게 수정할 수 있다. 같은 이름의 실험이 있으면 `./poc baselines second`처럼 다른 접두사를 쓴다.
+LR·RF 모두 학습 환자에서 결측치를 처리하고 범주형 변수를 변환하며, `class_weight="balanced"`로 적은 클래스에 더 큰 가중치를 준다. LR에는 표준화도 포함한다. 각 `train.py`·`config.toml`은 자유롭게 수정할 수 있다. 같은 이름의 실험이 있으면 `./dev baselines second`처럼 다른 접두사를 쓴다.
 
-**입력 효과는 같은 모델의 3개 실행끼리** `./poc compare --mode inputs`로 확인한다. LR과 RF는 같은 입력 그룹끼리 `./poc compare`로 비교한다. 서버 결과는 `--remote`를 추가한다. [비교 조건](parallel-work.md#5-두-가지-비교를-구분하기)
+**입력 효과는 같은 모델의 3개 실행끼리** `./dev compare --mode inputs`로 확인한다. LR과 RF는 같은 입력 그룹끼리 `./dev compare`로 비교한다. 서버 결과는 `--remote`를 추가한다. [비교 조건](parallel-work.md#5-두-가지-비교를-구분하기)
 
 ## 2. 최종 후보와 임계값 고정
 
@@ -44,15 +44,15 @@ LR·RF 모두 학습 환자에서 결측치를 처리하고 범주형 변수를 
 공용 MLflow의 후보를 선택하려면 다음을 실행한다. 보관한 모델·코드를 검증하여 내려받고, 선택한 실행을 고정한다. 기본 결과만 업로드한 후보는 사용할 수 없다.
 
 ```sh
-./poc final freeze final-v1 --remote
+./dev final freeze final-v1 --remote
 ```
 
 목록에는 모델 보관이 완료된 실행만 표시된다. 고정할 번호를 공백으로 선택한다. `--owner 이름`·`--experiment 실험명`·`--dataset 데이터ID`·`--feature-set clinical`로 좁히고, `--list`로 선택 없이 조회한다. `--limit 50`은 표시 개수를 늘린다. 직접 고르려면 `--remote --run-ids MLFLOW_ID1 MLFLOW_ID2`를 사용한다. 번호 입력 중 `q`는 취소다.
 
-로컬에 전체 실행이 있으면 `./poc final freeze final-v1`로 선택하거나 `--runs`로 직접 지정한다. `실행ID`는 결과 폴더 이름과 `result.json`의 `run_id`에 있는 **로컬 ID**다.
+로컬에 전체 실행이 있으면 `./dev final freeze final-v1`로 선택하거나 `--runs`로 직접 지정한다. `실행ID`는 결과 폴더 이름과 `result.json`의 `run_id`에 있는 **로컬 ID**다.
 
 ```sh
-./poc final freeze final-v1 \
+./dev final freeze final-v1 \
   --runs "Global/artifacts/작성자/실험명1/실행ID1" \
          "Global/artifacts/작성자/실험명2/실행ID2" \
   --reference 실행ID1
@@ -75,7 +75,7 @@ Youden J는 **민감도 + 특이도 − 1**이며 동점이면 더 높은 임계
 고정 직후에는 후보별 준비 상태와 다음 명령이 표시된다. 이후에도 다음 명령으로 **완료·누락·오류를 한 번에** 확인한다.
 
 ```sh
-./poc final status final-v1
+./dev final status final-v1
 ```
 
 보관한 표준 예측 코드와 현재 환경이 일치하면 바로 실행할 명령을 보여준다. 환경이 달라졌으면 새 실험으로 복원하는 명령을, 사용자 정의 모델은 모델 읽기 코드 확인 절차를 안내한다. 상태 조회는 학습·예측을 실행하거나 시험 점수를 표시하지 않는다.
@@ -83,7 +83,7 @@ Youden J는 **민감도 + 특이도 − 1**이며 동점이면 더 높은 임계
 예측 명령의 형태는 다음과 같다. `baseline-lr-clinical`은 예측 코드가 있는 실험명, `실행ID`는 계획에 포함된 **로컬 ID**다. `predict.py`는 모델을 다시 학습하지 않는다.
 
 ```sh
-./poc exec baseline-lr-clinical predict.py \
+./dev exec baseline-lr-clinical predict.py \
   --plan Global/artifacts/final/final-v1 \
   --run-id 실행ID
 ```
@@ -110,7 +110,7 @@ Youden J는 **민감도 + 특이도 − 1**이며 동점이면 더 높은 임계
 모든 후보의 예측이 저장된 뒤 실행한다.
 
 ```sh
-./poc final report final-v1
+./dev final report final-v1
 ```
 
 완료 경로는 `Global/artifacts/final/final-v1/report/`다.
