@@ -86,7 +86,7 @@ GPU 환경을 켜도 scikit-learn의 로지스틱 회귀·랜덤 포레스트가
 
 `./dev up -d --wait`로 시작한 뒤 `./dev url`로 개인 토큰을 확인하고 `http://localhost:8888`에 접속한다. 시작 후 같은 터미널에서 다음 명령을 실행할 수 있다. GPU 시작 명령도 접속 방법은 같다. 포트를 바꾸려면 시작 전에 `export POC_NOTEBOOK_PORT=8889`처럼 지정한다.
 
-JupyterLab에서 **Launcher → Terminal**을 열면 프로젝트의 Python과 `poc` 명령을 바로 사용할 수 있다. MUSIC 준비·이름 등록·실험 생성·학습·비교는 [README의 개인 실험 절차](../../README.md#2-music-준비와-사전-실습)를 따른다. Ubuntu 터미널에서 데이터를 준비할 때는 `./dev music`을 사용한다.
+JupyterLab에서 **Launcher → Terminal**을 열면 별도 가상환경 활성화나 경로 설정 없이 프로젝트의 Python과 `poc` 명령을 사용할 수 있다. `poc --help`로 명령 목록을 확인한다. MUSIC 준비·이름 등록·실험 생성·학습·비교는 [README의 개인 실험 절차](../../README.md#2-music-준비와-사전-실습)를 따른다. Ubuntu 터미널에서 데이터를 준비할 때는 `./dev music`을 사용한다.
 
 `Global/notebooks/00_environment_check.ipynb`로 노트북 실행도 확인할 수 있다. 개인 분석은 `Members/이름/notebooks/`에 작성한다.
 
@@ -132,7 +132,7 @@ IDE에서 실행할 때는 `poc env sync exp001` 후 `poc env status exp001`에 
 |---|---|
 | 개인 코드·설정 | 다음 실행에 바로 반영. 이미지 재빌드 불필요 |
 | 개인 패키지 | 같은 환경을 쓰는 모든 학습·커널 종료 후 `./dev env` 명령 사용. 이미지 재빌드 불필요 |
-| `.env` 접속 정보, Docker·공통 패키지 파일 | 학습·저장 완료 후 환경 종료·재시작 |
+| `.env` 접속 정보, Docker·공통 패키지 파일, 작업 환경 시작 설정 | 학습·저장 완료 후 환경 종료·재시작 |
 | CPU ↔ GPU | 기존 환경 종료 후 원하는 환경으로 시작 |
 
 학습 중에는 해당 실험의 코드·설정·공통 데이터와 학습·평가 관련 공통 코드를 바꾸지 않는다. 공통 명령 화면·전송 등 보조 코드의 변경 허용 범위는 [실험 가이드](parallel-work.md#4-학습하고-결과-확인하기)를 따른다. 다른 학습 방법을 작성하려면 별도 실험 폴더를 사용한다. 환경을 종료하면 실행 중인 학습도 중단된다.

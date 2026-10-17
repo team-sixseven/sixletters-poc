@@ -1,11 +1,13 @@
 """Opt-in real Docker checks; no GPU hardware or GPU image downloads are required."""
 
+import asyncio
 import csv
 import hashlib
 import json
 import os
 import re
 import secrets
+import shlex
 import shutil
 import socket
 import subprocess
@@ -18,6 +20,8 @@ from urllib.request import Request, urlopen
 
 import pytest
 from test_tracking_docker import tracking_server  # noqa: F401
+from tornado.httpclient import HTTPRequest
+from tornado.websocket import websocket_connect
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_DOCKER_TESTS") != "1",
@@ -134,6 +138,59 @@ def test_gpu_configuration_is_opt_in_and_cpu_needs_no_nvidia_device(docker_works
     )
 
 
+def assert_new_terminal_uses_project_environment(run, notebook_port):
+    servers = run("./dev", "shell", "-c", "jupyter server list --json")
+    server = next(json.loads(line) for line in servers.splitlines() if line.startswith("{"))
+    headers = {"Authorization": f"token {server['token']}"}
+    base_url = f"http://127.0.0.1:{notebook_port}"
+    with urlopen(
+        Request(f"{base_url}/api/terminals", method="POST", headers=headers), timeout=15
+    ) as response:
+        terminal = json.load(response)["name"]
+    nonce = uuid.uuid4().hex
+    marker = f"JUPYTER_ENV_{nonce}"
+    # The complete marker is absent from the typed command, so terminal echo cannot pass it.
+    python_probe = (
+        "import sys; "
+        "assert sys.executable == '/opt/venv/bin/python', sys.executable; "
+        f"print('JUPYTER_ENV_' + {nonce!r})"
+    )
+    command = f"poc --help && python -c {shlex.quote(python_probe)}\n"
+
+    async def check_terminal():
+        connection = await websocket_connect(
+            HTTPRequest(
+                f"ws://127.0.0.1:{notebook_port}/terminals/websocket/{terminal}",
+                headers=headers,
+                connect_timeout=10,
+            ),
+        )
+        output = ""
+        try:
+            await connection.write_message(json.dumps(["stdin", command]))
+            async with asyncio.timeout(30):
+                while marker not in output:
+                    message = await connection.read_message()
+                    assert message is not None, f"Jupyter terminal closed unexpectedly:\n{output}"
+                    event = json.loads(message)
+                    if event[0] == "stdout":
+                        output += event[1]
+            assert "usage:" in output
+        except TimeoutError:
+            pytest.fail(f"A fresh Jupyter terminal could not run poc and project Python:\n{output}")
+        finally:
+            connection.close()
+
+    try:
+        asyncio.run(check_terminal())
+    finally:
+        with urlopen(
+            Request(f"{base_url}/api/terminals/{terminal}", method="DELETE", headers=headers),
+            timeout=15,
+        ):
+            pass
+
+
 def test_compose_up_starts_workspace_trains_and_preserves_results(docker_workspace):
     workspace, run, notebook_port = docker_workspace
     # Existing local files must move safely on the real bind mount before the worker starts.
@@ -161,6 +218,7 @@ def test_compose_up_starts_workspace_trains_and_preserves_results(docker_workspa
     environment = json.loads(environment_check.read_text(encoding="utf-8"))
     assert environment["synthetic_data_and_ecg"] == "passed"
     assert environment["gpu"] == "not requested"
+    assert_new_terminal_uses_project_environment(run, notebook_port)
 
     run("./dev", "demo", "--output", "Global/data/prepared/demo-v1")
     run("./dev", "init", "--owner", "팀원 가", "--data", "Global/data/prepared/demo-v1")
@@ -288,6 +346,7 @@ def test_compose_up_starts_workspace_trains_and_preserves_results(docker_workspa
     assert len(list((workspace / "Global/artifacts").rglob("model.pkl"))) == 2
     run("docker", "compose", "up", "-d", "--wait", timeout=120)
     assert run("docker", "compose", "ps", "-q", "cpu").strip() != container_id
+    assert_new_terminal_uses_project_environment(run, notebook_port)
     run(
         "./dev", "compare", "--runs", *runs, "--output", "Global/artifacts/restarted-comparison.csv"
     )
