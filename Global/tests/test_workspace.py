@@ -147,6 +147,56 @@ def test_starter_fits_numeric_and_categorical_preprocessing_on_training_inputs(t
     )
 
 
+def test_cli_prepares_once_then_compares_two_independent_personal_runs(tmp_path):
+    prepared = tmp_path / "공통 자료"
+    experiment_root = tmp_path / "개인 코드"
+    output_root = tmp_path / "개인 결과"
+    cli("prepare", "--demo", "--output", prepared)
+    original_bundle = (prepared / "dataset.json").read_bytes()
+    owners = ("팀원 가", "팀원 나")
+    for owner in owners:
+        initialized = cli(
+            "init-experiment", "--owner", owner, "--name", "exp001", "--root", experiment_root
+        )
+        config = experiment_root / owner / "experiments" / "exp001" / "config.toml"
+        training_script = config.with_name("train.py")
+        assert str(training_script) in initialized.stdout
+        assert "model" not in tomllib.loads(config.read_text(encoding="utf-8"))["experiment"]
+        if owner == owners[1]:
+            config.write_text(
+                config.read_text(encoding="utf-8").replace("C = 1.0", "max_depth = 3"),
+                encoding="utf-8",
+            )
+            training_script.write_text(
+                training_script.read_text(encoding="utf-8")
+                .replace(
+                    "from sklearn.linear_model import LogisticRegression",
+                    "from sklearn.ensemble import RandomForestClassifier",
+                )
+                .replace("LogisticRegression(", "RandomForestClassifier(")
+                .replace('"max_iter": 1000,', '"n_estimators": 20,'),
+                encoding="utf-8",
+            )
+        python(training_script, "--data", prepared, "--output-root", output_root)
+    runs = sorted(path.parent for path in output_root.rglob("result.json"))
+    assert len(runs) == 2
+    assert {path.relative_to(output_root).parts[0] for path in runs} == set(owners)
+    for run in runs:
+        assert json.loads((run / "result.json").read_text(encoding="utf-8"))["synthetic"] is True
+        assert (run / "models" / "model.pkl").is_file()
+    output = tmp_path / "팀 비교표.csv"
+    cli("compare", "--mode", "experiments", "--runs", *runs, "--output", output)
+    comparison = pd.read_csv(output)
+    assert comparison.set_index("owner")["model"].to_dict() == {
+        owners[0]: "LogisticRegression",
+        owners[1]: "RandomForestClassifier",
+    }
+    assert original_bundle == (prepared / "dataset.json").read_bytes()
+    repeated = cli("prepare", "--demo", "--output", prepared, check=False)
+    assert repeated.returncode == 2
+    assert original_bundle == (prepared / "dataset.json").read_bytes()
+
+
 def test_personal_script_rejects_another_experiments_config_before_saving(tmp_path):
     data = save_prepared_dataset(make_demo_dataset(), tmp_path / "data", synthetic=True)
     first = init_experiment("팀원 가", "exp001", root=tmp_path / "experiments")
