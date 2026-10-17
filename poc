@@ -1,0 +1,217 @@
+#!/bin/sh
+# Run tools in the workspace; each experiment owns its Python code and packages.
+set -eu
+
+repo_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
+cd "$repo_dir"
+
+service=cpu
+service_explicit=0
+if [ "${1:-}" = --gpu ]; then
+    service=gpu
+    service_explicit=1
+    shift
+fi
+command=${1:-help}
+if [ "$#" -gt 0 ]; then shift; fi
+if [ "${1:-}" = --gpu ]; then
+    service=gpu
+    service_explicit=1
+    shift
+fi
+
+case "$command" in
+    help|-h|--help)
+        cat <<'HELP'
+사용법: ./poc <작업> [--gpu] [인자]
+
+  up -d --wait       이미지·환경 점검 후 백그라운드에서 Jupyter 시작
+  down               작업 공간 종료 (코드·데이터·결과는 유지)
+  build              공통 이미지만 준비 또는 갱신
+  check              Python·CSV·평가·ECG 점검 (GPU 선택 시 CUDA 연산까지)
+  shell              Python을 실행할 컨테이너 터미널 열기
+  status             환경·이름·데이터·전송 상태와 다음 작업 확인
+  url                실행 중인 Jupyter의 개인 접속 주소·토큰 확인
+  notebook <실험명>  노트북 생성·패키지 준비·커널 연결 (이름 생략 시 up과 동일)
+  test               테스트 실행 (pytest 인자 추가 가능)
+  deps <작업>        패키지 add/remove/lock/export (설정 변경 후에도 실행 가능)
+  init               이름과 공통 데이터 위치 저장
+  new <실험명>       개인 예제 생성 (--from 원본실험: 코드·설정 복제)
+  baselines [접두사] LR·RF × 임상·ECG·결합 개인 실험 6개 생성 (학습은 exec)
+  env <작업> <실험명> 개인 패키지 add/remove/sync, kernel, 전용 환경 isolate, 공통 복귀 share, 상태 status
+  exec <실험명> <파일명.py> [인자]  선택한 개인 환경에서 Python 파일 실행
+  practice           개인 MUSIC 데이터·모델·평가지표 실습 노트북 생성
+  demo               합성 예제 데이터 생성
+  music              MUSIC 다운로드·정답·컬럼 정리·공통 환자 분할
+  sync               아직 전송하지 못한 결과를 공용 MLflow 서버에 재전송
+  archive            선택한 실험의 모델·재현 파일을 추가 업로드
+  restore <새실험명> 목록에서 복원할 결과 선택 (--remote: 서버의 보관 완료 결과)
+  final freeze <이름> 최종 후보·임계값 확정 후 모델 사본 보관
+  final report <이름> 확정 후보의 시험 예측으로 최종 표·그래프 생성
+  final status <이름> 최종 후보별 완료 상태·남은 명령 확인
+  compare [--remote] 로컬 또는 공용 서버에서 비교할 실험 결과 선택
+  tracking <작업>    공용 서버 up/down/logs/status/user (서버 운영 장비에서)
+
+학습: ./poc exec exp001 train.py 또는 ./poc shell 안에서 poc exec exp001 train.py
+GPU: ./poc up --gpu -d --wait
+프로젝트 명령 도움말: ./poc <명령> --help
+HELP
+        exit 0
+        ;;
+esac
+
+if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+    echo 'Docker와 Docker Compose를 먼저 준비하세요. Global/docs/development.md를 확인하세요.' >&2
+    exit 2
+fi
+
+if [ "$command" = tracking ]; then
+    if [ ! -f "$repo_dir/.env.tracking" ]; then
+        echo '.env.tracking.example을 .env.tracking으로 복사하고 서버 설정을 입력하세요. Global/docs/tracking.md를 확인하세요.' >&2
+        exit 2
+    fi
+    tracking_compose() {
+        docker compose --project-directory "$repo_dir" \
+            --env-file "$repo_dir/.env.tracking" -f "$repo_dir/compose.tracking.yaml" "$@"
+    }
+    action=${1:-help}
+    if [ "$#" -gt 0 ]; then shift; fi
+    case "$action" in
+        up) tracking_compose up --build -d --wait "$@" ;;
+        down) tracking_compose down "$@" ;;
+        logs) tracking_compose logs "$@" ;;
+        status) tracking_compose ps "$@" ;;
+        user)
+            if [ "$#" -ne 1 ]; then
+                echo '사용법: ./poc tracking user <계정명>' >&2
+                exit 2
+            fi
+            tracking_compose exec tracking python /opt/tracking/start_tracking_server.py user "$1"
+            ;;
+        *)
+            echo '사용법: ./poc tracking <up|down|logs|status|user 계정명>' >&2
+            exit 2
+            ;;
+    esac
+    exit 0
+fi
+
+# Bind-mounted outputs belong to the person running the command, not root.
+POC_UID=$(id -u)
+POC_GID=$(id -g)
+export POC_UID POC_GID
+
+compose() {
+    docker compose --project-directory "$repo_dir" -f "$repo_dir/compose.yaml" "$@"
+}
+
+# Tools use the active workspace, including a GPU-only checkout.
+case "$command" in
+    up|down|build) ;;
+    *)
+        if [ "$service_explicit" = 0 ] \
+            && [ -z "$(compose ps --status running --quiet cpu)" ] \
+            && [ -n "$(compose ps --status running --quiet gpu)" ]; then
+            service=gpu
+        fi
+        ;;
+esac
+
+run() {
+    command_context=container
+    if [ "${1:-}" = poc ]; then command_context=host; fi
+    running=$(compose ps --status running --quiet "$service")
+    if [ -n "$running" ]; then
+        if [ "${POC_NO_TTY:-0}" = 1 ] || [ ! -t 0 ] || [ ! -t 1 ]; then
+            compose exec -T -e SIXLETTERS_COMMAND_CONTEXT="$command_context" \
+                -e SIXLETTERS_COMMAND_GPU="$service" "$service" poc-container "$@"
+        else
+            compose exec -e SIXLETTERS_COMMAND_CONTEXT="$command_context" \
+                -e SIXLETTERS_COMMAND_GPU="$service" "$service" poc-container "$@"
+        fi
+    else
+        if [ "${POC_NO_TTY:-0}" = 1 ] || [ ! -t 0 ] || [ ! -t 1 ]; then
+            compose run --rm --no-deps -T -e SIXLETTERS_COMMAND_CONTEXT="$command_context" \
+                -e SIXLETTERS_COMMAND_GPU="$service" "$service" "$@"
+        else
+            compose run --rm --no-deps -e SIXLETTERS_COMMAND_CONTEXT="$command_context" \
+                -e SIXLETTERS_COMMAND_GPU="$service" "$service" "$@"
+        fi
+    fi
+}
+
+case "$command" in
+    status)
+        compose ps
+        if [ -z "$(compose ps --status running --quiet "$service")" ]; then
+            echo '작업 환경이 꺼져 있습니다. 다음: ./poc up -d --wait (GPU: --gpu)'
+            exit 0
+        fi
+        # A stale image must still be able to explain why it needs rebuilding.
+        compose exec -T -e POC_SKIP_DEPENDENCY_CHECK=1 -e SIXLETTERS_COMMAND_CONTEXT=host \
+            -e SIXLETTERS_COMMAND_GPU="$service" "$service" poc-container poc status "$@"
+        ;;
+    url)
+        if [ "$#" -ne 0 ]; then echo '사용법: ./poc url' >&2; exit 2; fi
+        if [ -z "$(compose ps --status running --quiet "$service")" ]; then
+            echo '작업 환경을 먼저 시작하세요: ./poc up -d --wait' >&2
+            exit 2
+        fi
+        echo '아래 토큰은 개인 접속용입니다. 공유 문서·PR에 복사하지 마세요.'
+        compose exec -T "$service" poc-container jupyter server list
+        ;;
+    deps)
+        dependency_command=${1:-help}
+        if [ "$#" -gt 0 ]; then shift; fi
+        case "$dependency_command" in
+            add|remove)
+                compose run --rm --no-deps -T -e POC_SKIP_DEPENDENCY_CHECK=1 "$service" \
+                    uv "$dependency_command" --project Global --no-sync "$@"
+                ;;
+            lock)
+                compose run --rm --no-deps -T -e POC_SKIP_DEPENDENCY_CHECK=1 "$service" uv lock --project Global "$@"
+                ;;
+            export)
+                compose run --rm --no-deps -T -e POC_SKIP_DEPENDENCY_CHECK=1 "$service" uv export --project Global \
+                    --locked --no-dev --no-emit-project --output-file Global/requirements.txt "$@"
+                ;;
+            *)
+                echo '사용법: ./poc deps <add|remove|lock|export> [uv 인자]' >&2
+                exit 2
+                ;;
+        esac
+        ;;
+    build)
+        compose build "$service" "$@"
+        ;;
+    check)
+        if [ "$service" = gpu ]; then
+            run python Global/scripts/check_environment.py --gpu "$@"
+        else
+            run python Global/scripts/check_environment.py "$@"
+        fi
+        ;;
+    shell)
+        run bash "$@"
+        ;;
+    up)
+        compose up --build "$service" "$@"
+        echo 'Jupyter 접속 주소·토큰: ./poc url | 상태 확인: ./poc status'
+        ;;
+    notebook)
+        if [ "$#" -eq 0 ]; then
+            compose up --build "$service"
+        else
+            run poc notebook "$@"
+        fi
+        ;;
+    down)
+        compose --profile gpu down "$@"
+        ;;
+    test)
+        run pytest -c Global/pyproject.toml -q "$@"
+        ;;
+    *)
+        run poc "$command" "$@"
+        ;;
+esac

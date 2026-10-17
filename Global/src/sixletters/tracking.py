@@ -635,7 +635,7 @@ def archive_run(run_dir: Path) -> str:
         details = failure_details(error)
         raise TrackingError(
             f"[{details['code']}] {details['message']} "
-            "선택 요청은 저장되지 않았습니다. artifacts 폴더 권한을 확인한 뒤 uv run --project Global poc archive를 다시 실행하세요."
+            "선택 요청은 저장되지 않았습니다. artifacts 폴더 권한을 확인한 뒤 poc archive를 다시 실행하세요."
         ) from error
     uri, experiment_name = configuration
     request_path = (
@@ -652,9 +652,7 @@ def archive_run(run_dir: Path) -> str:
         # uploader holding the run lock, or a server call with a lost response.
         _write_json(request_path, request)
     except OSError as error:
-        raise TrackingError(
-            "Could not queue the selected result; retry uv run --project Global poc archive"
-        ) from error
+        raise TrackingError("Could not queue the selected result; retry poc archive") from error
     try:
         return _publish(run_dir, configuration, request_archive=True)
     except BundleError:

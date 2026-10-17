@@ -32,7 +32,7 @@ uv run --project Global poc new exp001
 uv run --project Global poc exec exp001 train.py
 ```
 
-`Members/alex/experiments/exp001/`의 코드·설정을 수정한다. 추가 패키지가 없으면 공통 환경을 사용한다. `uv run --project Global poc env add exp001 xgboost`로 필요한 패키지만 개인 환경에 추가한다. `uv run --project Global poc env isolate exp001`은 해당 실험만 분리한다. `Experiment.save()`는 평가와 결과 파일을 `Global/artifacts/`에 저장한다.
+`Members/alex/experiments/exp001/`의 코드·설정을 수정한다. 추가 패키지가 없으면 공통 환경을 사용한다. `poc env add exp001 xgboost`로 필요한 패키지만 개인 환경에 추가한다. `poc env isolate exp001`은 해당 실험만 분리한다. `Experiment.save()`는 평가와 결과 파일을 `Global/artifacts/`에 저장한다.
 
 ## 결과 비교
 
@@ -64,7 +64,7 @@ uv run --project Global poc final freeze selected
 uv run --project Global poc final status selected
 ```
 
-후보와 임계값을 고정한 후 상태 안내에 따라 저장 모델로 예측하고 `uv run --project Global poc final report selected`를 실행한다. 시험 결과를 보고 후보를 다시 선택하지 않는다.
+후보와 임계값을 고정한 후 상태 안내에 따라 저장 모델로 예측하고 `poc final report selected`를 실행한다. 시험 결과를 보고 후보를 다시 선택하지 않는다.
 
 ## 노트북과 사전 실습
 
@@ -75,3 +75,13 @@ uv run --project Global jupyter lab
 ```
 
 개인 실습 노트북에서 MUSIC CSV·코드북·기본 모델·불균형·평가 지표를 확인한다. 개인 실험 노트북은 연결된 SixSeven 커널을 선택한다.
+
+## Docker 실행
+
+```sh
+docker compose up --build
+./poc status
+./poc shell
+```
+
+컨테이너 터미널에서는 `poc` 명령을 사용한다. 호스트에서는 `./poc`로 같은 명령을 실행한다. GPU는 NVIDIA 드라이버와 WSL2·Docker GPU 지원이 준비된 장비에서 사용한다. [MLflow 서버 운영](Global/docs/tracking-server.md)을 따른다.

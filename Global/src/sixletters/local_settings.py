@@ -35,8 +35,8 @@ def resolve_workspace_path(root: Path, path: Path) -> Path:
         destination = root / "Global" / relative
         if absolute.exists():
             raise ValueError(
-                "Legacy data/results remain at the repository root. "
-                "Use a new directory below Global/data or Global/artifacts."
+                "Legacy data/results remain at the repository root. Run "
+                "python Global/scripts/migrate_layout.py before continuing."
             )
         return destination
     return absolute

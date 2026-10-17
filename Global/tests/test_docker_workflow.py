@@ -1,0 +1,660 @@
+"""Opt-in real Docker checks; no GPU hardware or GPU image downloads are required."""
+
+import csv
+import hashlib
+import json
+import os
+import re
+import secrets
+import shutil
+import socket
+import subprocess
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
+
+import pytest
+from test_tracking_docker import tracking_server  # noqa: F401
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("RUN_DOCKER_TESTS") != "1",
+    reason="Set RUN_DOCKER_TESTS=1 on a host with Docker to run container integration checks",
+)
+
+
+def copy_workspace(source: Path, workspace: Path) -> None:
+    """Copy executable project files without a developer's data, results or experiments."""
+
+    def ignore(directory, names):
+        excluded = {
+            ".git",
+            ".venv",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".poc-cache",
+            "__pycache__",
+            ".poc.local.toml",
+        }
+        if Path(directory) == source:
+            excluded.update({"data", "artifacts", "reports", "experiments", "notebooks"})
+        if Path(directory) == source / "Global":
+            excluded.update({"data", "artifacts", "reports"})
+        if Path(directory) == source / "Members":
+            return set(names) - {"README.md"}
+        return {name for name in names if name in excluded or name.startswith(".env")}
+
+    shutil.copytree(source, workspace, ignore=ignore)
+
+
+@pytest.fixture(scope="module")
+def docker_workspace(tmp_path_factory):
+    source = Path(__file__).resolve().parents[2]
+    workspace = tmp_path_factory.mktemp("docker") / "한글 공동 작업"
+    copy_workspace(source, workspace)
+    namespace = f"sixletters-test-{uuid.uuid4().hex[:12]}"
+    compose_path = workspace / "compose.yaml"
+    compose = compose_path.read_text(encoding="utf-8")
+    assert compose.count("image: sixseven-poc:") == 2
+    compose_path.write_text(
+        compose.replace("image: sixseven-poc:", f"image: {namespace}:"), encoding="utf-8"
+    )
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        notebook_port = listener.getsockname()[1]
+    environment = {
+        **{
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("MLFLOW_") and key != "POC_TRACKING_SYNC_INTERVAL"
+        },
+        "COMPOSE_PROJECT_NAME": namespace,
+        "POC_NO_TTY": "1",
+        "POC_NOTEBOOK_PORT": str(notebook_port),
+    }
+    environment.pop("RUN_DOCKER_TESTS", None)
+    # Raw Compose must work without the launcher providing the host identity.
+    environment.pop("POC_UID", None)
+    environment.pop("POC_GID", None)
+    environment.pop("COMPOSE_PROFILES", None)
+    environment.pop("COMPOSE_FILE", None)
+
+    def run(*arguments, timeout=180, expected_returncode=0, error_output=False):
+        completed = subprocess.run(
+            arguments,
+            cwd=workspace,
+            env=environment,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout,
+        )
+        assert completed.returncode == expected_returncode, (
+            f"{arguments!r} failed with exit code {completed.returncode}\n"
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
+        return completed.stderr if error_output else completed.stdout
+
+    yield workspace, run, notebook_port
+    subprocess.run(
+        ["docker", "compose", "--profile", "gpu", "down", "--remove-orphans"],
+        cwd=workspace,
+        env=environment,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    subprocess.run(
+        ["docker", "image", "rm", f"{namespace}:cpu"],
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+
+
+def test_gpu_configuration_is_opt_in_and_cpu_needs_no_nvidia_device(docker_workspace):
+    _, run, _ = docker_workspace
+    config = json.loads(run("docker", "compose", "--profile", "gpu", "config", "--format", "json"))
+    cpu = config["services"]["cpu"]
+    gpu = config["services"]["gpu"]
+    assert not cpu.get("gpus")
+    assert cpu["environment"]["SIXLETTERS_CONTAINER"] == "1"
+    assert not cpu.get("devices")
+    assert cpu.get("runtime") != "nvidia"
+    assert not cpu.get("deploy", {}).get("resources", {}).get("reservations", {}).get("devices")
+    assert "gpu" in gpu["profiles"]
+    assert gpu["environment"]["POC_REQUIRE_GPU"] == "1"
+    default_config = json.loads(run("docker", "compose", "config", "--format", "json"))
+    assert set(default_config["services"]) == {"cpu"}
+    reservations = gpu["deploy"]["resources"]["reservations"]["devices"]
+    assert any(
+        item["driver"] == "nvidia" and "gpu" in item["capabilities"] for item in reservations
+    )
+
+
+def test_compose_up_starts_workspace_trains_and_preserves_results(docker_workspace):
+    workspace, run, notebook_port = docker_workspace
+    # Existing local files must move safely on the real bind mount before the worker starts.
+    legacy_data = workspace / "data/raw/layout-check.txt"
+    legacy_result = workspace / "artifacts/layout-check/preserved.txt"
+    for path in (legacy_data, legacy_result):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"synthetic migration sentinel")
+    run("docker", "compose", "up", "--build", "-d", "--wait", timeout=900)
+    for previous in (legacy_data, legacy_result):
+        moved = workspace / "Global" / previous.relative_to(workspace)
+        assert moved.read_bytes() == b"synthetic migration sentinel"
+        assert not previous.exists()
+    container_id = run("docker", "compose", "ps", "-q", "cpu").strip()
+    assert container_id
+    running = json.loads(run("docker", "inspect", container_id))[0]
+    assert running["State"]["Health"]["Status"] == "healthy"
+    assert running["NetworkSettings"]["Ports"]["8888/tcp"] == [
+        {"HostIp": "127.0.0.1", "HostPort": str(notebook_port)}
+    ]
+    with pytest.raises(HTTPError) as response:
+        urlopen(f"http://127.0.0.1:{notebook_port}/api/contents", timeout=10)
+    assert response.value.code in (401, 403)
+    environment_check = workspace / "Global/artifacts/environment-check/cpu/environment.json"
+    environment = json.loads(environment_check.read_text(encoding="utf-8"))
+    assert environment["synthetic_data_and_ecg"] == "passed"
+    assert environment["gpu"] == "not requested"
+
+    run("./poc", "demo", "--output", "Global/data/prepared/demo-v1")
+    run("./poc", "init", "--owner", "팀원 가", "--data", "Global/data/prepared/demo-v1")
+    owners = ("팀원 가", "팀원 나")
+    run("./poc", "new", "exp001", "--script", "fit_rf.py")
+    run("./poc", "new", "exp001", "--owner", owners[1])
+    runs = []
+    for owner in owners:
+        if owner == owners[0]:
+            # Only the additional package is installed; numerical packages stay in /opt/venv.
+            run("./poc", "env", "add", "exp001", "tabulate==0.9.0", timeout=300)
+            experiment_dir = workspace / "Members" / owner / "experiments" / "exp001"
+            (experiment_dir / "package_probe.py").write_text(
+                "import importlib.metadata as m, json, sysconfig, numpy, sklearn, tabulate\n"
+                "print(json.dumps({'local': sorted(d.metadata['Name'] for d in "
+                "m.distributions(path=[sysconfig.get_path('purelib')])), "
+                "'numpy': numpy.__file__, 'sklearn': sklearn.__file__, "
+                "'tabulate': tabulate.__file__}))\n"
+            )
+            packages = json.loads(run("./poc", "exec", "exp001", "package_probe.py"))
+            assert packages["local"] == ["tabulate"]
+            assert packages["numpy"].startswith("/opt/venv/")
+            assert packages["sklearn"].startswith("/opt/venv/")
+            assert packages["tabulate"].startswith(f"/workspace/Members/{owner}/.venv/")
+            (experiment_dir / "preprocessing.yaml").write_text("imputer: median\n")
+            run("./poc", "exec", "exp001", "fit_rf.py", timeout=300)
+            assert (workspace / "Members" / owner / ".venv/pyvenv.cfg").is_file()
+        else:
+            run("./poc", "exec", "exp001", "--owner", owner, "train.py")
+            member = workspace / "Members" / owner
+            assert not any(
+                (member / name).exists()
+                for name in (".venv", "requirements.lock", "environment.json")
+            )
+        # The running workspace is reused; training is not replaced with a common runner.
+        assert run("docker", "compose", "ps", "-q", "cpu").strip() == container_id
+        saved = list((workspace / "Global/artifacts" / owner / "exp001").glob("*/result.json"))
+        assert len(saved) == 1
+        result = json.loads(saved[0].read_text(encoding="utf-8"))
+        assert result["owner"] == owner
+        if owner == owners[0]:
+            assert result["software"]["packages"]["tabulate"] == "0.9.0"
+            assert "environment.json" in result["resources"]
+            assert (
+                saved[0].parent / "resources/preprocessing.yaml"
+            ).read_text() == "imputer: median\n"
+            assert (saved[0].parent / "source/fit_rf.py").is_file()
+            assert not (saved[0].parent / "source/.venv").exists()
+        else:
+            assert "environment.json" not in result["resources"]
+            assert "scikit-learn" in result["software"]["packages"]
+        assert result["synthetic"] is True
+        assert result["comparison_context"]["evaluation"]["split"] == "validation"
+        assert (saved[0].parent / "predictions.csv").stat().st_size > 0
+        for filename in result["model_files"]:
+            assert (saved[0].parent / "models" / filename).stat().st_size > 0
+        runs.append(str(saved[0].parent.relative_to(workspace)))
+
+    # Recovery commands must match the terminal where the failed command was entered.
+    requirements = workspace / "Members" / owners[0] / "requirements.in"
+    original_requirements = requirements.read_text(encoding="utf-8")
+    requirements.write_text(original_requirements.replace("==0.9.0", ">=0.9.0"), encoding="utf-8")
+    try:
+        host_error = run(
+            "./poc",
+            "exec",
+            "exp001",
+            "package_probe.py",
+            expected_returncode=2,
+            error_output=True,
+        )
+        inner_error = run(
+            "./poc",
+            "shell",
+            "-c",
+            "poc exec exp001 package_probe.py",
+            expected_returncode=2,
+            error_output=True,
+        )
+        status = run("./poc", "env", "status", "exp001")
+        assert "./poc env sync exp001 --owner '팀원 가' --relock" in host_error
+        assert "poc env sync exp001 --owner '팀원 가' --relock" in inner_error
+        assert "./poc" not in inner_error
+        assert "./poc env sync exp001 --owner '팀원 가' --relock" in status
+    finally:
+        requirements.write_text(original_requirements, encoding="utf-8")
+
+    comparison = "Global/artifacts/비교 결과/validation.csv"
+    reference_id = Path(runs[1]).name
+    output = run(
+        "./poc",
+        "compare",
+        "--runs",
+        *runs,
+        "--reference",
+        reference_id,
+        "--output",
+        comparison,
+    )
+    assert "기준 실행:" in output and reference_id in output
+    with (workspace / comparison).open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert {row["owner"] for row in rows} == set(owners)
+    assert len(rows) == 2
+    assert all(row["evaluation_split"] == "validation" for row in rows)
+    assert all(0 <= float(row["roc_auc"]) <= 1 for row in rows)
+    assert all(row["reference_run_id"] == reference_id for row in rows)
+    assert rows[1]["is_reference"] == "True"
+    assert float(rows[1]["roc_auc_delta"]) == 0
+    assert float(rows[1]["roc_auc_delta_ci_lower"]) == 0
+    assert float(rows[1]["roc_auc_delta_ci_upper"]) == 0
+
+    # Direct Compose startup must derive the mounted checkout owner, including non-1000 IDs.
+    host_uid = workspace.stat().st_uid
+    host_gid = workspace.stat().st_gid
+    for file in [environment_check, workspace / comparison, workspace / ".poc.local.toml"]:
+        assert file.stat().st_uid == host_uid
+        assert file.stat().st_gid == host_gid
+
+    # Stopping and recreating the service must preserve data, models, and comparisons.
+    run("docker", "compose", "down", "--remove-orphans")
+    assert (workspace / "Global/data/prepared/demo-v1/dataset.json").is_file()
+    assert (workspace / comparison).is_file()
+    assert len(list((workspace / "Global/artifacts").rglob("result.json"))) == 2
+    assert len(list((workspace / "Global/artifacts").rglob("model.pkl"))) == 2
+    run("docker", "compose", "up", "-d", "--wait", timeout=120)
+    assert run("docker", "compose", "ps", "-q", "cpu").strip() != container_id
+    run(
+        "./poc", "compare", "--runs", *runs, "--output", "Global/artifacts/restarted-comparison.csv"
+    )
+    assert (workspace / "Global/artifacts/restarted-comparison.csv").is_file()
+
+    # Exec into a running workspace must also reject a stale dependency environment.
+    pyproject = workspace / "Global/pyproject.toml"
+    original = pyproject.read_text(encoding="utf-8")
+    changed, replacements = re.subn(
+        r"^description = .*$",
+        'description = "Docker dependency recovery check"',
+        original,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    assert replacements == 1 and changed != original
+    pyproject.write_text(changed, encoding="utf-8")
+    run("./poc", "shell", "-c", "true", expected_returncode=2)
+    run("./poc", "deps", "lock")
+    run("./poc", "deps", "export")
+    before_rebuild = run("docker", "compose", "ps", "-q", "cpu").strip()
+    run("docker", "compose", "up", "--build", "-d", "--wait", timeout=900)
+    after_rebuild = run("docker", "compose", "ps", "-q", "cpu").strip()
+    assert after_rebuild and after_rebuild != before_rebuild, (
+        "Compose kept the old container after rebuilding changed dependencies. "
+        f"Compose version: {run('docker', 'compose', 'version', '--short')}. "
+        "Use the supported Compose version (2.40.3 or later)."
+    )
+    run("./poc", "check")
+
+
+def test_workspace_worker_retries_saved_runs_when_tracking_returns(
+    docker_workspace,
+    tracking_server,  # noqa: F811
+):
+    workspace, run, _ = docker_workspace
+    server = tracking_server
+    server["environment"]["MLFLOW_SERVER_ALLOWED_HOSTS"] += ",tracking:5000"
+    server["run"]("up", "-d", "--wait")
+    username, password = "retry-member", secrets.token_urlsafe(24)
+    server["request"]("/api/2.0/mlflow/users/create", {"username": username, "password": password})
+    experiment_id = server["request"](
+        "/api/2.0/mlflow/experiments/create", {"name": "background-retry"}
+    )["experiment_id"]
+    settings = workspace / ".env"
+    settings.write_text(
+        "MLFLOW_TRACKING_URI=http://tracking:5000\n"
+        f"MLFLOW_TRACKING_USERNAME={username}\n"
+        f"MLFLOW_TRACKING_PASSWORD={password}\n"
+        "MLFLOW_EXPERIMENT_NAME=background-retry\n"
+        "POC_TRACKING_SYNC_INTERVAL=5\n",
+        encoding="utf-8",
+    )
+    settings.chmod(0o600)
+    run("docker", "compose", "up", "--build", "-d", "--wait", timeout=900)
+    workspace_id = run("docker", "compose", "ps", "-q", "cpu").strip()
+    networks = json.loads(
+        run("docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", workspace_id)
+    )
+    network = next(iter(networks))
+    server_id = server["run"]("ps", "-q", "tracking").strip()
+    run("docker", "network", "connect", "--alias", "tracking", network, server_id)
+    try:
+        server["run"]("stop", "tracking")
+        if not (workspace / "Global/data/prepared/demo-v1/dataset.json").exists():
+            run("./poc", "demo")
+        run("./poc", "init", "--owner", "복구검증가", "--data", "Global/data/prepared/demo-v1")
+        local_runs = {}
+        for owner in ("복구검증가", "복구검증나"):
+            run("./poc", "new", "retry001", "--owner", owner, "--script", "fit_model.py")
+            if owner == "복구검증가":
+                run(
+                    "./poc",
+                    "env",
+                    "add",
+                    "retry001",
+                    "--owner",
+                    owner,
+                    "tabulate==0.9.0",
+                    timeout=300,
+                )
+            resource = workspace / "Members" / owner / "experiments/retry001/settings.yaml"
+            resource.write_text("preprocessing: median\n")
+            run("./poc", "exec", "retry001", "--owner", owner, "fit_model.py", timeout=300)
+            saved = list(
+                (workspace / "Global/artifacts" / owner / "retry001").glob("*/result.json")
+            )
+            assert len(saved) == 1
+            result = json.loads(saved[0].read_text())
+            assert result["synthetic"] is True
+            if owner == "복구검증가":
+                assert result["software"]["packages"]["tabulate"] == "0.9.0"
+                assert "environment.json" in result["resources"]
+            local_runs[result["run_id"]] = {
+                "owner": owner,
+                "directory": saved[0].parent,
+                "hashes": {
+                    path.relative_to(saved[0].parent).as_posix(): hashlib.sha256(
+                        path.read_bytes()
+                    ).hexdigest()
+                    for path in saved[0].parent.rglob("*")
+                    if path.is_file()
+                },
+            }
+
+        # The two personal script processes have exited. Only the live workspace worker can retry.
+        server["run"]("up", "-d", "--wait")
+        # The retry interval is not an upload deadline: authenticated file uploads
+        # and an existing queue can take longer on shared CI machines.
+        deadline = time.monotonic() + 180
+        published = {}
+        while time.monotonic() < deadline:
+            response = server["request"](
+                "/api/2.0/mlflow/runs/search",
+                {
+                    "experiment_ids": [experiment_id],
+                    "filter": "attributes.status = 'FINISHED' and tags.`sixletters.complete` = 'true'",
+                    "max_results": 100,
+                },
+                credentials=(username, password),
+            )
+            published = {
+                tags["sixletters.local_run_id"]: remote
+                for remote in response.get("runs", [])
+                if (tags := {tag["key"]: tag["value"] for tag in remote["data"]["tags"]})
+                and tags.get("sixletters.local_run_id") in local_runs
+            }
+            if set(published) == set(local_runs):
+                break
+            time.sleep(5)
+        if set(published) != set(local_runs):
+            remaining = server["request"](
+                "/api/2.0/mlflow/runs/search",
+                {"experiment_ids": [experiment_id], "max_results": 100},
+                credentials=(username, password),
+            )
+            states = [
+                {"status": remote["info"]["status"], "tags": remote["data"].get("tags", [])}
+                for remote in remaining.get("runs", [])
+            ]
+            pytest.fail(f"Background retry did not finish both saved runs; server states: {states}")
+        assert run("docker", "compose", "ps", "-q", "cpu").strip() == workspace_id
+        for local_id, saved in local_runs.items():
+            assert saved["hashes"] == {
+                path.relative_to(saved["directory"]).as_posix(): hashlib.sha256(
+                    path.read_bytes()
+                ).hexdigest()
+                for path in saved["directory"].rglob("*")
+                if path.is_file()
+            }
+            assert {metric["key"] for metric in published[local_id]["data"]["metrics"]} == {
+                "roc_auc",
+                "average_precision",
+                "brier_score",
+            }
+
+        remote_comparison = "Global/artifacts/overlay-remote-comparison.csv"
+        run(
+            "./poc",
+            "compare",
+            "--remote",
+            "--run-ids",
+            *(item["info"]["run_id"] for item in published.values()),
+            "--output",
+            remote_comparison,
+        )
+        with (workspace / remote_comparison).open(encoding="utf-8", newline="") as handle:
+            compared = list(csv.DictReader(handle))
+        assert {item["owner"] for item in compared} == {"복구검증가", "복구검증나"}
+
+        # Selection made offline must survive the command exiting and be retried
+        # by the workspace worker without promoting other local runs.
+        selected_id, selected_run = next(iter(local_runs.items()))
+        server["run"]("stop", "tracking")
+        response = run(
+            "./poc",
+            "archive",
+            "--run",
+            selected_run["directory"].relative_to(workspace).as_posix(),
+            expected_returncode=1,
+        )
+        assert "pending" in response
+        server["run"]("up", "-d", "--wait")
+        remote_id = published[selected_id]["info"]["run_id"]
+        deadline = time.monotonic() + 180
+        archive_status = None
+        while time.monotonic() < deadline:
+            remote = server["request"](
+                f"/api/2.0/mlflow/runs/get?run_id={remote_id}", credentials=(username, password)
+            )["run"]
+            tags = {tag["key"]: tag["value"] for tag in remote["data"]["tags"]}
+            archive_status = tags.get("sixletters.archive_status")
+            if archive_status == "complete":
+                break
+            time.sleep(5)
+        assert archive_status == "complete"
+        for local_id, base in published.items():
+            remote = server["request"](
+                f"/api/2.0/mlflow/runs/get?run_id={base['info']['run_id']}",
+                credentials=(username, password),
+            )["run"]
+            tags = {tag["key"]: tag["value"] for tag in remote["data"]["tags"]}
+            assert remote["info"]["status"] == "FINISHED"
+            assert tags["sixletters.complete"] == "true"
+            assert tags["sixletters.archive_status"] == (
+                "complete" if local_id == selected_id else "none"
+            )
+    finally:
+        settings.unlink(missing_ok=True)
+        run("docker", "network", "disconnect", network, server_id)
+
+
+@pytest.mark.parametrize("personal_packages", [False, True])
+def test_personal_notebook_kernel_runs_packages_and_survives_workspace_restart(
+    docker_workspace, personal_packages
+):
+    workspace, run, notebook_port = docker_workspace
+    run("docker", "compose", "up", "--build", "-d", "--wait", timeout=900)
+    owner = "개인 패키지 팀원" if personal_packages else "공통 패키지 팀원"
+    experiment = "notebook001"
+    expected_prefix = f"/workspace/Members/{owner}/.venv" if personal_packages else "/opt/venv"
+    run("./poc", "new", experiment, "--owner", owner)
+    if personal_packages:
+        run("./poc", "env", "add", experiment, "--owner", owner, "tabulate==0.9.0", timeout=300)
+    run("./poc", "env", "kernel", experiment, "--owner", owner, timeout=300)
+    display = f"SixSeven · {owner} / {experiment}"
+    kernel_code = (
+        "import sys, os\n"
+        "from pathlib import Path\n"
+        "import sixletters, sklearn\n"
+        f"assert str(Path(sys.prefix)) == {expected_prefix!r}\n"
+        'assert Path.cwd() == Path("/workspace")\n'
+        'assert not os.environ.get("SIXLETTERS_EXECUTION_JSON")\n'
+    )
+    if personal_packages:
+        kernel_code += (
+            'import tabulate; assert tabulate.__version__ == "0.9.0"\n'
+            'assert Path(sklearn.__file__).is_relative_to("/opt/venv")\n'
+            "assert Path(tabulate.__file__).is_relative_to(sys.prefix)\n"
+        )
+    probe = workspace / "Global/artifacts/notebook-kernel-check.py"
+    probe.parent.mkdir(parents=True, exist_ok=True)
+    probe.write_text(
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "from jupyter_client import KernelManager\n"
+        "from jupyter_client.kernelspec import KernelSpecManager\n"
+        "from sixletters.personal_env import jupyter_data_path, env_add\n"
+        "root = Path('/workspace')\n"
+        f"experiment = root / 'Members' / {owner!r} / 'experiments' / {experiment!r}\n"
+        "specs = KernelSpecManager(kernel_dirs=[str(jupyter_data_path(root) / 'kernels')])\n"
+        f"name = next(name for name, spec in specs.get_all_specs().items() if spec['spec']['display_name'] == {display!r})\n"
+        "manager = KernelManager(kernel_name=name, kernel_spec_manager=specs)\n"
+        "manager.start_kernel(cwd=str(root))\n"
+        "client = manager.blocking_client()\n"
+        "client.start_channels()\n"
+        "try:\n"
+        "    client.wait_for_ready(timeout=60)\n"
+        f"    code = {kernel_code!r}\n"
+        "    reply = client.execute_interactive(code, timeout=60)\n"
+        "    assert reply['content']['status'] == 'ok', reply['content']\n"
+        "    try:\n"
+        "        env_add(experiment, ['tabulate==0.8.10'])\n"
+        "    except ValueError as error:\n"
+        "        assert 'kernel' in str(error).lower()\n"
+        "    else:\n"
+        "        raise AssertionError('An open notebook must protect its environment')\n"
+        "finally:\n"
+        "    client.stop_channels()\n"
+        "    manager.shutdown_kernel(now=True)\n"
+        "print('Personal notebook kernel verified')\n",
+        encoding="utf-8",
+    )
+    for restart in (False, True):
+        if restart:
+            run("docker", "compose", "down")
+            run("docker", "compose", "up", "-d", "--wait", timeout=120)
+        # Check discovery by the actual running Jupyter service, not just a local spec reader.
+        servers = run("./poc", "shell", "-c", "jupyter server list --json")
+        server = next(json.loads(line) for line in servers.splitlines() if line.startswith("{"))
+        request = Request(
+            f"http://127.0.0.1:{notebook_port}/api/kernelspecs",
+            headers={"Authorization": f"token {server['token']}"},
+        )
+        with urlopen(request, timeout=15) as response:
+            specs = json.load(response)["kernelspecs"]
+        assert display in {item["spec"]["display_name"] for item in specs.values()}
+        assert "Personal notebook kernel verified" in run(
+            "./poc", "shell", "-c", "python Global/artifacts/notebook-kernel-check.py", timeout=120
+        )
+    if personal_packages:
+        run("./poc", "env", "remove", experiment, "--owner", owner, "tabulate", timeout=300)
+
+
+def test_member_environment_reuse_isolation_and_reproduction(docker_workspace):
+    workspace, run, _ = docker_workspace
+    run("./poc", "up", "-d", "--wait", timeout=900)
+    owner = "공유 환경 팀원"
+    member = workspace / "Members" / owner
+    run("./poc", "init", "--owner", owner, "--data", "Global/data/prepared/demo-v1")
+    for name in ("shared001", "shared002"):
+        run("./poc", "new", name)
+        (member / "experiments" / name / "probe.py").write_text(
+            "import json, sys, tabulate\n"
+            "print(json.dumps({'prefix': sys.prefix, 'version': tabulate.__version__}))\n"
+        )
+    run("./poc", "env", "add", "shared001", "tabulate==0.9.0", timeout=300)
+    stamp = (member / ".venv/pyvenv.cfg").stat().st_mtime_ns
+    run("./poc", "env", "add", "shared001", "tabulate==0.9.0", timeout=300)
+    run("./poc", "env", "sync", "shared002", timeout=300)
+    assert (member / ".venv/pyvenv.cfg").stat().st_mtime_ns == stamp
+    run("./poc", "new", "shared003", "--from", "shared001")
+    cloned = member / "experiments/shared003"
+    assert cloned.joinpath("probe.py").is_file()
+    assert not cloned.joinpath(".venv").exists()
+    run("./poc", "notebook", "shared003", timeout=300)
+    notebook = json.loads((cloned / "analysis.ipynb").read_text())
+    assert notebook["metadata"]["kernelspec"]["display_name"].endswith("/ shared003")
+    assert "준비 완료" in run("./poc", "status")
+    assert (member / ".venv/pyvenv.cfg").stat().st_mtime_ns == stamp
+    for name in ("shared001", "shared002"):
+        status = run("./poc", "env", "status", name)
+        assert "개인 공통" in status
+        probe = json.loads(run("./poc", "exec", name, "probe.py", timeout=300))
+        assert probe == {"prefix": f"/workspace/Members/{owner}/.venv", "version": "0.9.0"}
+        assert not (member / "experiments" / name / ".venv").exists()
+    assert (member / ".venv/pyvenv.cfg").stat().st_mtime_ns == stamp
+    # Two independently edited experiments can train concurrently in one member environment.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(run, "./poc", "exec", name, "train.py", timeout=300)
+            for name in ("shared001", "shared002")
+        ]
+        for future in futures:
+            assert "Validation results saved" in future.result()
+    assert (member / ".venv/pyvenv.cfg").stat().st_mtime_ns == stamp
+    owner_locks = {
+        filename: (member / filename).read_bytes()
+        for filename in ("requirements.in", "requirements.lock", "environment.json")
+    }
+    run("./poc", "env", "isolate", "shared002", timeout=300)
+    run("./poc", "env", "add", "shared002", "tabulate==0.8.10", timeout=300)
+    assert "실험 전용" in run("./poc", "env", "status", "shared002")
+    probe = json.loads(run("./poc", "exec", "shared002", "probe.py"))
+    assert probe == {
+        "prefix": f"/workspace/Members/{owner}/experiments/shared002/.venv",
+        "version": "0.8.10",
+    }
+    assert json.loads(run("./poc", "exec", "shared001", "probe.py"))["version"] == "0.9.0"
+    assert owner_locks == {filename: (member / filename).read_bytes() for filename in owner_locks}
+    run("./poc", "exec", "shared002", "train.py", timeout=300)
+    selected = []
+    for name, version in (("shared001", "0.9.0"), ("shared002", "0.8.10")):
+        saved = max(
+            (workspace / "Global/artifacts" / owner / name).glob("*/result.json"),
+            key=lambda path: path.stat().st_mtime_ns,
+        )
+        result = json.loads(saved.read_text())
+        assert result["software"]["packages"]["tabulate"] == version
+        assert f"tabulate=={version}" in (saved.parent / "resources/requirements.lock").read_text()
+        selected.append(saved.parent.relative_to(workspace).as_posix())
+    run("./poc", "compare", "--runs", *selected, "--output", "Global/artifacts/shared-env.csv")
+    assert "shared001" in run("./poc", "compare", "--experiment", "shared001", "--list")
+    run("./poc", "restore", "restored001", "--run", selected[1])
+    assert "실험 전용" in run("./poc", "env", "status", "restored001")
+    run("./poc", "exec", "restored001", "train.py", timeout=300)
+    restored = json.loads(run("./poc", "exec", "restored001", "probe.py"))
+    assert restored["version"] == "0.8.10"
+    assert owner_locks == {filename: (member / filename).read_bytes() for filename in owner_locks}
+    assert json.loads(run("./poc", "exec", "shared001", "probe.py"))["version"] == "0.9.0"
