@@ -1,0 +1,66 @@
+# Local environments / tools
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.poc.local.toml
+.poc-cache/
+.poc-env.lock
+.poc-execution.lock
+.poc-notebook.lock
+.poc-env-readers/
+.poc-env-state.json
+.poc-env-*/
+
+# Credentials (do not force-add)
+.env
+.env.*
+!.env.example
+!.env.tracking.example
+*.pem
+*.key
+
+# Patient-level data, split manifests and trained models stay local.
+Global/data/**
+!Global/data/README.md
+Global/artifacts/**
+!Global/artifacts/README.md
+# Legacy local paths remain ignored until migrated.
+/data/**
+/artifacts/**
+*.dat
+*.hea
+*.edf
+*.parquet
+*.pkl
+*.pickle
+*.joblib
+*.pt
+*.pth
+*.onnx
+*.[uU][bB][jJ]
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.zip
+*.tar
+*.gz
+
+# Experiment-generated output stays local, including JSON model exports.
+/Members/*/experiments/*/**/[oO][uU][tT][pP][uU][tT][sS]/
+/Members/*/experiments/*/**/[mM][oO][dD][eE][lL][sS]/**/*.[jJ][sS][oO][nN]
+# Apply the same rule before legacy experiments are migrated.
+/experiments/*/*/**/[oO][uU][tT][pP][uU][tT][sS]/
+/experiments/*/*/**/[mM][oO][dD][eE][lL][sS]/**/*.[jJ][sS][oO][nN]

@@ -1,0 +1,63 @@
+[project]
+name = "sixletters-poc"
+version = "0.1.0"
+description = "SixSeven team PoC workspace"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "numpy>=2,<3",
+  "pandas>=2.2,<3",
+  "scikit-learn>=1.6,<2",
+  "matplotlib>=3.9,<4",
+  "jupyterlab>=4.4,<5",
+  "ipykernel>=6.29,<8",
+  "mlflow-skinny==3.17.1",
+  "filelock>=3.20,<4",
+  "packaging>=24,<27",
+]
+
+[project.optional-dependencies]
+ecg = ["wfdb>=4.2,<5", "neurokit2>=0.2.10,<0.3"]
+gpu = ["torch==2.13.0; sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+[project.scripts]
+poc = "sixletters.__main__:main"
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "ruff>=0.14,<0.15", "pre-commit>=4,<5", "nbstripout>=0.9,<0.10"]
+tracking-server = [
+    "mlflow[auth]==3.17.1",
+]
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sixletters"]
+
+[tool.uv]
+required-version = "==0.9.26"
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu126", extra = "gpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+# Package classification must not depend on leftover local source directories.
+src = []
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["scripts", "sixletters"]
