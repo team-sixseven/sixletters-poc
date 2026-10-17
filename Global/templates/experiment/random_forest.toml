@@ -1,0 +1,14 @@
+[experiment]
+owner = "YOUR_NAME"
+name = "exp001"
+feature_set = "clinical"
+seed = 42
+# Omit features to use every column in feature_set.
+# features = ["clinical_1"]
+
+[parameters]
+n_estimators = 300
+min_samples_leaf = 2
+# The starter defaults to balanced class weights computed from training labels.
+# To disable weighting, set class_weight to None in your training script.
+# class_weight = "balanced"
