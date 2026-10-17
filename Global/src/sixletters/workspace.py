@@ -10,6 +10,7 @@ from pathlib import Path
 WINDOWS_RESERVED = re.compile(r"^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)", re.I)
 FEATURE_SETS = frozenset({"clinical", "ecg", "combined"})
 STARTER_MODELS = frozenset({"logistic", "random-forest"})
+PRACTICE_NOTEBOOK = "01_music_practice.ipynb"
 
 
 def validate_component(value: str, label: str) -> str:
@@ -65,6 +66,54 @@ def validate_experiment_identity(config: Path, *, settings: dict | None = None) 
             f"Experiment identity does not match its Members folder. "
             f"In {config}, set [experiment] " + "; ".join(corrections)
         )
+
+
+def init_practice(owner: str, *, root: Path = Path("Members")) -> Path:
+    """Copy an editable MUSIC walkthrough without changing data or existing work."""
+    owner = validate_component(owner, "owner")
+    template = Path(__file__).resolve().parents[2] / "templates/practice" / PRACTICE_NOTEBOOK
+    if not template.is_file():
+        raise ValueError("Practice template is missing; use an installed repository checkout")
+    notebook = json.loads(template.read_text(encoding="utf-8"))
+    bindings = 0
+    for cell in notebook["cells"]:
+        if cell["cell_type"] != "code":
+            continue
+        source = cell["source"]
+        lines = source.splitlines(keepends=True) if isinstance(source, str) else source
+        for index, line in enumerate(lines):
+            if line.rstrip("\r\n") == 'OWNER = "__POC_OWNER__"':
+                lines[index] = f"OWNER = {json.dumps(owner, ensure_ascii=False)}\n"
+                bindings += 1
+        cell["source"] = lines
+        cell["outputs"] = []
+        cell["execution_count"] = None
+    if bindings != 1:
+        raise ValueError("Practice template must contain exactly one owner setting")
+    content = json.dumps(notebook, ensure_ascii=False, indent=1) + "\n"
+
+    root = Path(root)
+    if root.is_symlink():
+        raise ValueError("Members folder must not be a symbolic link")
+    root.mkdir(parents=True, exist_ok=True)
+    _reject_ambiguous_name(root, owner)
+    owner_dir = root / owner
+    if owner_dir.is_symlink():
+        raise ValueError("Owner folder must not be a symbolic link")
+    owner_dir.mkdir(exist_ok=True)
+    notebook_dir = owner_dir / "notebooks"
+    if notebook_dir.is_symlink():
+        raise ValueError("Notebook folder must not be a symbolic link")
+    notebook_dir.mkdir(exist_ok=True)
+    destination = notebook_dir / PRACTICE_NOTEBOOK
+    try:
+        with destination.open("x", encoding="utf-8") as handle:
+            handle.write(content)
+    except FileExistsError as error:
+        raise FileExistsError(
+            f"Practice notebook already exists; open it in JupyterLab: {destination}"
+        ) from error
+    return destination
 
 
 def init_experiment(

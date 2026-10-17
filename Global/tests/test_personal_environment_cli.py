@@ -86,6 +86,22 @@ def test_scaffold_invalid_script_does_not_create_partial_experiment(workspace, s
     assert not (workspace / "Members/팀원/experiments/exp001").exists()
 
 
+def test_kernel_command_preserves_owner_and_relock(workspace, monkeypatch, capsys):
+    config = init_experiment("다른 팀원", "실험 1", root=workspace / "Members")
+    calls = []
+
+    def register(directory, **options):
+        calls.append((directory, options))
+        return "SixSeven · 다른 팀원 / 실험 1", workspace / "kernel.json"
+
+    monkeypatch.setattr(personal_env, "env_kernel", register)
+    assert invoke(monkeypatch, "env", "kernel", "실험 1", "--owner", "다른 팀원", "--relock") == 0
+    assert calls == [(config.parent, {"relock": True})]
+    output = capsys.readouterr().out
+    assert "SixSeven · 다른 팀원 / 실험 1" in output
+    assert "모든 학습과 노트북 커널을 종료" in output
+
+
 def test_environment_status_reports_member_default_without_installing(
     workspace, monkeypatch, capsys
 ):
@@ -146,3 +162,33 @@ def test_exec_and_status_share_refresh_reason_and_complete_command(
     assert personal_env.LOCK_REFRESH_REASON in exec_output
     assert f"다음: {command}" in exec_output
     assert (active / "environment.json").read_text() == "{}\n"
+
+
+def test_notebook_refresh_error_has_actual_experiment_command(workspace, monkeypatch, capsys):
+    config = init_experiment("팀원", "실험 1", root=workspace / "Members")
+    active = personal_env.environment_directory(config.parent)
+    (active / "requirements.in").write_text("tabulate==0.9.0\n")
+    (active / "requirements.lock").write_text("tabulate==0.9.0\n")
+    (active / "environment.json").write_text("{}\n")
+    monkeypatch.setenv("SIXLETTERS_CONTAINER", "1")
+    monkeypatch.setenv("SIXLETTERS_COMMAND_CONTEXT", "container")
+    with pytest.raises(SystemExit) as error:
+        invoke(monkeypatch, "notebook", "실험 1")
+    assert error.value.code == 2
+    import shlex
+
+    command = capsys.readouterr().err.split("다음: ")[-1].strip()
+    assert shlex.split(command) == [
+        "uv",
+        "run",
+        "--project",
+        "Global",
+        "poc",
+        "env",
+        "sync",
+        "실험 1",
+        "--owner",
+        "팀원",
+        "--relock",
+    ]
+    assert not (config.parent / "analysis.ipynb").exists()

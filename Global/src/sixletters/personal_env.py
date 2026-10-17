@@ -189,7 +189,8 @@ def _busy(active: list[dict] | None = None) -> ValueError:
         details = " 사용 중: " + ", ".join(labels) + "."
     return ValueError(
         "실험이 실행 중이거나 패키지 환경을 변경 중입니다. "
-        "학습 또는 Python 프로세스가 끝난 뒤 다시 실행하세요." + details
+        "학습이 끝날 때까지 기다리거나 Jupyter에서 Kernel > Shut Down Kernel로 커널을 "
+        "종료한 뒤 다시 실행하세요. 노트북 탭을 닫는 것만으로는 종료되지 않습니다." + details
     )
 
 
@@ -1004,6 +1005,7 @@ def _sync(path: Path, content: str, *, relock: bool, force_install: bool) -> Pat
             },
         )
     python = _python(path / ENV_DIR)
+    _refresh_scope_kernels(path, python)
     return python
 
 
@@ -1102,6 +1104,7 @@ def env_isolate(experiment_dir: Path) -> Path:
             # before it can be reused. Never copy a virtual environment between directories.
             _check_environment(experiment)
             _write_selection(experiment, "isolated", resources)
+    _refresh_registered_kernel(experiment)
     return experiment
 
 
@@ -1158,6 +1161,7 @@ def env_share(experiment_dir: Path) -> Path:
                 with _locked(active):
                     _check_share_requirements(active, owner)
             _write_selection(experiment, "shared")
+    _refresh_registered_kernel(experiment)
     return owner
 
 
@@ -1204,3 +1208,270 @@ def _set_runtime_environment(environment: dict[str, str], active: Path, python: 
     else:
         environment.pop("VIRTUAL_ENV", None)
     environment["PATH"] = str(python.parent) + os.pathsep + environment.get("PATH", "")
+
+
+def _runtime_prefix(active: Path, python: Path) -> Path:
+    return active / ENV_DIR if python == _python(active / ENV_DIR) else Path(sys.prefix)
+
+
+def jupyter_data_path(root: Path) -> Path:
+    """Keep persistent kernel registrations separate for each checkout and runtime."""
+    identity = {
+        "root": str(Path(root).resolve()),
+        "base_fingerprint": _baseline()["fingerprint"],
+        "prefix": str(Path(sys.prefix).resolve()),
+        "version": platform.python_version(),
+        "platform": sys.platform,
+        "machine": platform.machine(),
+    }
+    return Path(root) / ".poc-cache/jupyter" / _digest(json.dumps(identity, sort_keys=True))[:20]
+
+
+def _kernel_spec_path(experiment: Path) -> Path:
+    root = project_root(experiment)
+    relative = experiment.relative_to(root)
+    name = "sixletters-" + _digest(str(root) + "\n" + relative.as_posix())[:24]
+    return jupyter_data_path(root) / "kernels" / name / "kernel.json"
+
+
+def _refresh_scope_kernels(active: Path, python: Path) -> None:
+    """Update only existing registrations after installation, under the environment gate."""
+    if active.parent.name == "Members":
+        directory = active / "experiments"
+        experiments = sorted(directory.iterdir()) if directory.is_dir() else []
+    else:
+        experiments = [active]
+    for experiment in experiments:
+        if (
+            _member_directory(experiment) is None
+            or experiment.is_symlink()
+            or not (experiment / "config.toml").is_file()
+        ):
+            continue
+        try:
+            selected = environment_directory(experiment)
+        except ValueError:
+            continue
+        if selected == active:
+            specification = _kernel_spec_path(experiment)
+            if specification.exists() or specification.is_symlink():
+                try:
+                    _write_kernel_spec(experiment, python)
+                except (OSError, ValueError) as error:
+                    raise ValueError(
+                        "패키지 설치는 완료했지만 기존 노트북 커널을 갱신하지 못했습니다. "
+                        f"원인: {error}\n다음: {_env_command(experiment, 'kernel')}"
+                    ) from error
+
+
+def _refresh_registered_kernel(experiment: Path) -> None:
+    if _member_directory(experiment) is None:
+        return
+    specification = _kernel_spec_path(experiment)
+    if specification.exists() or specification.is_symlink():
+        try:
+            env_kernel(experiment)
+        except EnvironmentRefreshError:
+            raise
+        except (OSError, ValueError) as error:
+            raise ValueError(
+                "패키지 환경 범위는 변경했지만 노트북 커널을 준비하지 못했습니다. "
+                f"원인: {error}\n다음: {_env_command(experiment, 'kernel')}"
+            ) from error
+
+
+def env_kernel(experiment_dir: Path, *, relock: bool = False) -> tuple[str, Path]:
+    """Synchronize one environment and register it without copying server credentials."""
+    path = _experiment(experiment_dir)
+    root = project_root(path)
+    relative = path.relative_to(root)
+    if (
+        len(relative.parts) != 4
+        or relative.parts[0] != "Members"
+        or relative.parts[2] != "experiments"
+    ):
+        raise ValueError("Notebook kernels require a Members/<owner>/experiments/<name> folder")
+    if not relock:
+        active = environment_directory(path)
+        with _locked(active):
+            users = _active_readers(active)
+            if any(user["experiment"] == path.name and user["kind"] == "kernel" for user in users):
+                destination = _kernel_spec_path(path)
+                try:
+                    if destination.is_symlink() or destination.stat().st_size > 8192:
+                        raise ValueError("Invalid kernel registration")
+                    saved = json.loads(destination.read_text(encoding="utf-8"))
+                    content = _input_content(active)
+                    if _uses_common_runtime(active, content):
+                        python = Path(sys.executable)
+                        ready = True
+                    else:
+                        lock, manifest = _read_locked(active, content, _baseline())
+                        python = _python(active / ENV_DIR)
+                        ready = _ready(active, manifest) and _installed_matches(
+                            active, manifest, lock
+                        )
+                    expected = {
+                        "argv": [
+                            str(python),
+                            "-m",
+                            "sixletters.personal_env",
+                            "--kernel",
+                            str(path),
+                            "--connection-file",
+                            "{connection_file}",
+                            "--runtime-prefix",
+                            str(_runtime_prefix(active, python)),
+                        ],
+                        "display_name": f"SixSeven · {relative.parts[1]} / {relative.parts[3]}",
+                        "language": "python",
+                        "env": {"PYTHONPATH": str(root / "Global/src")},
+                    }
+                    if saved == expected and ready:
+                        return expected["display_name"], destination
+                except (OSError, ValueError):
+                    pass
+                raise _busy(users)
+    with (
+        _environment_guidance(path),
+        _experiment_locked(path),
+        _locked(environment_directory(path)),
+    ):
+        python = _prepare(environment_directory(path), relock=relock)
+        return _write_kernel_spec(path, python)
+
+
+def _write_kernel_spec(path: Path, python: Path) -> tuple[str, Path]:
+    root = project_root(path)
+    relative = path.relative_to(root)
+    display = f"SixSeven · {relative.parts[1]} / {relative.parts[3]}"
+    directory = _kernel_spec_path(path).parent
+    if any(part.is_symlink() for part in (directory, *directory.parents)):
+        raise ValueError("Jupyter kernel cache must not contain symbolic links")
+    directory.mkdir(parents=True, exist_ok=True)
+    spec = {
+        "argv": [
+            str(python),
+            "-m",
+            "sixletters.personal_env",
+            "--kernel",
+            str(path),
+            "--connection-file",
+            "{connection_file}",
+            "--runtime-prefix",
+            str(_runtime_prefix(environment_directory(path), python)),
+        ],
+        "display_name": display,
+        "language": "python",
+        "env": {"PYTHONPATH": str(root / "Global/src")},
+    }
+    destination = directory / "kernel.json"
+    if destination.is_symlink():
+        raise ValueError("Jupyter kernel specification must not be a symbolic link")
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=directory, delete=False
+    ) as handle:
+        temporary = Path(handle.name)
+        json.dump(spec, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    try:
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return display, destination
+
+
+def launch_kernel(
+    experiment_dir: Path, connection_file: Path, *, runtime_prefix: Path | None = None
+) -> None:
+    """Hold the environment lock until shutdown, including idle notebook time."""
+    path = _experiment(experiment_dir)
+    with _environment_guidance(path), _experiment_locked(path):
+        active = environment_directory(path)
+        with _locked(active):
+            common = _uses_common_runtime(active, _input_content(active))
+            expected_prefix = runtime_prefix if common else active / ENV_DIR
+            if (
+                expected_prefix is None
+                or Path(sys.prefix).resolve() != expected_prefix.resolve()
+                or (common and Path(sys.prefix).resolve() == (active / ENV_DIR).resolve())
+            ):
+                raise ValueError(
+                    "이 실험에 등록된 SixSeven 커널을 선택하세요. "
+                    "패키지 환경 범위가 바뀌었다면 커널을 다시 연결하세요.\n"
+                    f"다음: {_env_command(path, 'kernel')}"
+                )
+            lease = _kernel_lease(active, path)
+        try:
+            _start_kernel(path, active, connection_file)
+        finally:
+            lease.release()
+
+
+def _kernel_lease(active: Path, experiment: Path | None = None) -> FileLock:
+    content = _input_content(active)
+    if _uses_common_runtime(active, content):
+        return _lease(active, experiment, kind="kernel")
+    try:
+        manifest = json.loads((active / MANIFEST_FILE).read_text(encoding="utf-8"))
+        lock = (active / LOCK_FILE).read_text(encoding="utf-8")
+        matches = manifest["requirements_sha256"] == _digest(content) and manifest[
+            "lock_sha256"
+        ] == _digest(lock)
+    except (OSError, ValueError, KeyError) as error:
+        raise EnvironmentRefreshError(
+            LOCK_REFRESH_REASON, "--relock", experiment=experiment
+        ) from error
+    if not matches:
+        raise EnvironmentRefreshError(LOCK_REFRESH_REASON, "--relock", experiment=experiment)
+    try:
+        _overlay_paths(active, manifest)
+    except EnvironmentRefreshError as error:
+        raise EnvironmentRefreshError(error.reason, error.option, experiment=experiment) from error
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise EnvironmentRefreshError(
+            INSTALL_REPAIR_REASON, "--repair", experiment=experiment
+        ) from error
+    if not _ready(active, manifest):
+        raise EnvironmentRefreshError(INSTALL_REPAIR_REASON, "--repair", experiment=experiment)
+    return _lease(active, experiment, kind="kernel")
+
+
+def _start_kernel(path: Path, active: Path, connection_file: Path) -> None:
+    root = project_root(path)
+    # Notebook cells are interactive, not a previous script invocation from the server.
+    from .execution import ENVIRONMENT_KEY
+
+    os.environ.pop(ENVIRONMENT_KEY, None)
+    os.environ.pop("PYTHONHOME", None)
+    _set_runtime_environment(os.environ, active, Path(sys.executable))
+    os.environ["PYTHONPATH"] = str(root / "Global/src")
+    os.chdir(root)
+    sys.path.insert(0, str(path))
+    from ipykernel.kernelapp import IPKernelApp
+
+    application = IPKernelApp.instance()
+    application.initialize(["-f", str(connection_file)])
+    application.start()
+
+
+def _kernel_main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Launch a registered personal experiment kernel")
+    parser.add_argument("--kernel", required=True, type=Path)
+    parser.add_argument("--connection-file", required=True, type=Path)
+    parser.add_argument("--runtime-prefix", type=Path)
+    arguments = parser.parse_args()
+    try:
+        launch_kernel(
+            arguments.kernel, arguments.connection_file, runtime_prefix=arguments.runtime_prefix
+        )
+    except (OSError, ValueError, ImportError) as error:
+        print(f"노트북 환경 준비 실패: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_kernel_main())

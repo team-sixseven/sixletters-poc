@@ -65,3 +65,13 @@ uv run --project Global poc final status selected
 ```
 
 후보와 임계값을 고정한 후 상태 안내에 따라 저장 모델로 예측하고 `uv run --project Global poc final report selected`를 실행한다. 시험 결과를 보고 후보를 다시 선택하지 않는다.
+
+## 노트북과 사전 실습
+
+```sh
+uv run --project Global poc practice
+uv run --project Global poc notebook exp001
+uv run --project Global jupyter lab
+```
+
+개인 실습 노트북에서 MUSIC CSV·코드북·기본 모델·불균형·평가 지표를 확인한다. 개인 실험 노트북은 연결된 SixSeven 커널을 선택한다.
