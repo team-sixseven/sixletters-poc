@@ -641,6 +641,12 @@ def test_terminated_reader_process_releases_lease_and_packages_can_change(isolat
     finally:
         child.kill()
         child.wait(timeout=10)
+    # Windows may release OS file locks after the terminated process is signalled.
+    # Wait for the real lease to clear; never remove a lock that is still held.
+    deadline = time.monotonic() + 10
+    while active := pe._active_readers(owner):
+        assert time.monotonic() < deadline, f"Terminated reader still holds leases: {active}"
+        time.sleep(0.02)
     python = pe.env_add(path, ["poc-env-extra==1.0"])
     assert _version(python, "poc-env-extra") == "1.0"
 
