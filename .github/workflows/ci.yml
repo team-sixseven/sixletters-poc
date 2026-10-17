@@ -1,0 +1,146 @@
+name: Team checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened, edited]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Metadata-only edits must not cancel a running code check for the same PR.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base == null && 'metadata' || 'code' }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    if: github.event_name != 'pull_request' || github.event.action != 'edited' || github.event.changes.base != null
+    runs-on: ubuntu-24.04
+    outputs:
+      tests: ${{ steps.scope.outputs.tests }}
+      tests_mode: ${{ steps.scope.outputs.tests_mode }}
+      smoke: ${{ steps.scope.outputs.smoke }}
+      native: ${{ steps.scope.outputs.native }}
+      docker: ${{ steps.scope.outputs.docker }}
+    steps:
+      - name: Check PR branch direction
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [[ "$BASE" == main && ( "$HEAD" != develop || "$HEAD_REPO" != "$REPO" ) ]]; then
+            echo 'main accepts release PRs from this repository develop branch only.'
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Select checks
+        id: scope
+        run: python Global/scripts/ci_scope.py
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.9.26"
+          enable-cache: true
+      - name: Install check dependencies
+        env:
+          TESTS_MODE: ${{ fromJSON(steps.scope.outputs.tests_mode) }}
+        run: |
+          if [[ "$TESTS_MODE" == full ]]; then
+            uv sync --project Global --locked --extra ecg
+          else
+            uv sync --project Global --locked
+          fi
+      - name: Check code quality and tracked files
+        run: uv run --project Global --locked --no-sync pre-commit run --all-files --show-diff-on-failure
+        env:
+          SKIP: no-commit-to-branch
+      - run: uv export --project Global --locked --no-dev --no-emit-project --output-file Global/requirements.txt
+      - run: git diff --exit-code
+      - name: Run Linux regression tests
+        if: steps.scope.outputs.tests == 'true'
+        env:
+          TESTS_MODE: ${{ fromJSON(steps.scope.outputs.tests_mode) }}
+        run: uv run --project Global --locked --no-sync python Global/scripts/verify_changes.py --tests-only "$TESTS_MODE"
+      - name: Check environment and notebook
+        if: steps.scope.outputs.smoke == 'true'
+        run: |
+          uv run --project Global --locked --extra ecg python Global/scripts/smoke_check.py --ecg
+          uv run --project Global --locked --extra ecg jupyter nbconvert --to notebook --execute Global/notebooks/00_environment_check.ipynb --output-dir Global/artifacts/notebook-check
+
+  compatibility:
+    needs: checks
+    if: needs.checks.outputs.native != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.checks.outputs.native || '[]') }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.9.26"
+          enable-cache: true
+      - run: uv sync --project Global --locked --extra ecg
+      - run: uv run --project Global --locked --extra ecg pytest -c Global/pyproject.toml -q
+      - run: uv run --project Global --locked --extra ecg python Global/scripts/smoke_check.py --ecg
+      - run: uv run --project Global --locked --extra ecg jupyter nbconvert --to notebook --execute Global/notebooks/00_environment_check.ipynb --output-dir Global/artifacts/notebook-check
+
+  docker:
+    needs: checks
+    if: needs.checks.outputs.docker != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJSON(needs.checks.outputs.docker || '[]') }}
+    name: docker (${{ matrix.suite }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-compose-action@54042514f505b273907334ae2b9cdbb9a0213c1a # v2.4.0
+        with:
+          version: "v2.40.3"
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.9.26"
+          enable-cache: true
+      - run: uv sync --project Global --locked
+      - name: Verify Docker integration
+        env:
+          RUN_DOCKER_TESTS: "1"
+          SUITE: ${{ matrix.suite }}
+        run: |
+          case "$SUITE" in
+            workspace)
+              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py -k 'not test_workspace_worker_retries_saved_runs_when_tracking_returns' -q --durations=5
+              ;;
+            recovery)
+              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py::test_workspace_worker_retries_saved_runs_when_tracking_returns -q --durations=5
+              ;;
+            tracking)
+              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_tracking_docker.py -q --durations=5
+              ;;
+            *) echo 'Unknown Docker suite'; exit 1 ;;
+          esac
+
+  final_gate:
+    # A skipped metadata run must not replace the required check on the same SHA.
+    name: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base == null && 'metadata-only (no validation)' || 'validate' }}
+    if: always() && (github.event_name != 'pull_request' || github.event.action != 'edited' || github.event.changes.base != null)
+    needs: [checks, compatibility, docker]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Require selected checks to pass
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python Global/scripts/ci_validate.py

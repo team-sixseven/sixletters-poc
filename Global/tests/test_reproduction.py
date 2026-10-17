@@ -68,7 +68,9 @@ def test_restore_preserves_files_and_trace_without_loading_code_or_models(origin
     assert restored == saved
     assert config == root / "restored/experiments/second/config.toml"
     assert (config.parent / "fit.py").read_bytes() == (run / "source/fit.py").read_bytes()
-    assert (config.parent / "settings/features.yaml").read_bytes() == b"depth: 3\n"
+    assert (config.parent / "settings/features.yaml").read_bytes() == (
+        run / "resources/settings/features.yaml"
+    ).read_bytes()
     assert (config.parent / "outputs/.restore/models/model.py").read_bytes() == (
         run / "models/model.py"
     ).read_bytes()

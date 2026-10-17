@@ -200,7 +200,7 @@ def test_execution_holds_lock_during_child_process(isolated, monkeypatch):
 
     monkeypatch.setattr(pe.subprocess, "run", assert_locked)
     assert pe.execute_script(path, Path("fit.py"), []) == 0
-    assert (path / ".poc-env.lock").exists()
+    assert pe.env_sync(path) == pe._python(path / pe.ENV_DIR)
 
 
 @pytest.mark.parametrize(
@@ -568,7 +568,7 @@ def test_environment_snapshot_reads_only_active_text_records(isolated):
     owner = pe.environment_directory(path)
     (path / pe.INPUT_FILE).write_text("stale-local==1\n")
     (path / pe.SCOPE_FILE).write_text('scope = "shared"\n')
-    (owner / pe.INPUT_FILE).write_text("poc-env-extra==1.0\n")
+    (owner / pe.INPUT_FILE).write_bytes(b"poc-env-extra==1.0\n")
     (owner / pe.ENV_DIR).symlink_to(root / "ignored-venv")
     assert pe.environment_resources(path) == {pe.INPUT_FILE: b"poc-env-extra==1.0\n"}
     (owner / pe.MANIFEST_FILE).write_bytes(b"bad\x00binary")

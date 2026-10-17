@@ -65,7 +65,7 @@ def test_local_archive_state_does_not_expose_invalid_configuration_or_mixed_iden
     enable()
     tracking.sync_runs(root)
     state_path = next((root / ".tracking").glob(f"*/{run.name}.json"))
-    state = json.loads(state_path.read_text())
+    state = json.loads(state_path.read_text(encoding="utf-8"))
     state.update(archive_status="complete", local_identity=["another", "experiment", run.name])
     state_path.write_text(json.dumps(state))
     assert tracking.local_archive_status(run) == "unknown"

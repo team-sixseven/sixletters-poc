@@ -44,7 +44,7 @@ git --version
 
 Docker Compose는 **2.40.3 이상**을 사용한다. 버전이 낮으면 Docker Desktop을 업데이트한다. Docker Engine을 직접 설치한 환경에서는 Compose 플러그인을 업데이트한다.
 
-Docker 서버 정보와 지원 버전을 확인하면 [README의 시작 절차](../../README.md#docker-실행)를 따른다. Docker Desktop은 작업하는 동안 실행 상태로 둔다.
+Docker 서버 정보와 지원 버전을 확인하면 [README의 시작 절차](../../README.md#1-저장소와-실행-환경-준비)를 따른다. Docker Desktop은 작업하는 동안 실행 상태로 둔다.
 
 저장소는 `~/projects/sixletters-poc`처럼 WSL의 Linux 파일 시스템에 둔다. Windows 드라이브의 `/mnt/c/` 아래보다 Linux 컨테이너의 파일 접근에 적합하다. [Docker WSL 권장 사항](https://docs.docker.com/desktop/features/wsl/best-practices/)
 
@@ -86,7 +86,7 @@ GPU 환경을 켜도 scikit-learn의 로지스틱 회귀·랜덤 포레스트가
 
 `./poc up -d --wait`로 시작한 뒤 `./poc url`로 개인 토큰을 확인하고 `http://localhost:8888`에 접속한다. 시작 후 같은 터미널에서 다음 명령을 실행할 수 있다. GPU 시작 명령도 접속 방법은 같다. 포트를 바꾸려면 시작 전에 `export POC_NOTEBOOK_PORT=8889`처럼 지정한다.
 
-JupyterLab에서 **Launcher → Terminal**을 열면 프로젝트의 Python과 `poc` 명령을 바로 사용할 수 있다. MUSIC 준비·이름 등록·실험 생성·학습·비교는 [README의 개인 실험 절차](../../README.md#개인-실험)를 따른다. Ubuntu 터미널에서 데이터를 준비할 때는 `./poc music`을 사용한다.
+JupyterLab에서 **Launcher → Terminal**을 열면 프로젝트의 Python과 `poc` 명령을 바로 사용할 수 있다. MUSIC 준비·이름 등록·실험 생성·학습·비교는 [README의 개인 실험 절차](../../README.md#2-music-준비와-사전-실습)를 따른다. Ubuntu 터미널에서 데이터를 준비할 때는 `./poc music`을 사용한다.
 
 `Global/notebooks/00_environment_check.ipynb`로 노트북 실행도 확인할 수 있다. 개인 분석은 `Members/이름/notebooks/`에 작성한다.
 
@@ -135,7 +135,7 @@ IDE에서 실행할 때는 `poc env sync exp001` 후 `poc env status exp001`에 
 | `.env` 접속 정보, Docker·공통 패키지 파일 | 학습·저장 완료 후 환경 종료·재시작 |
 | CPU ↔ GPU | 기존 환경 종료 후 원하는 환경으로 시작 |
 
-학습 중에는 해당 실험의 코드·설정·공통 데이터와 학습·평가 관련 공통 코드를 바꾸지 않는다. 공통 명령 화면·전송·개인 설정·실험 생성·개인 환경 관리 코드만 바뀐 경우는 저장을 막지 않는다. 실제 학습 패키지나 사용 중인 환경의 패키지 고정 파일 변경은 여기에 해당하지 않는다. 새 공통 Python 모듈은 기본적으로 학습·평가 관련 변경에 포함한다. 다른 학습 방법을 작성하려면 별도 실험 폴더를 사용한다. 환경을 종료하면 실행 중인 학습도 중단된다.
+학습 중에는 해당 실험의 코드·설정·공통 데이터와 학습·평가 관련 공통 코드를 바꾸지 않는다. 공통 명령 화면·전송 등 보조 코드의 변경 허용 범위는 [실험 가이드](parallel-work.md#4-학습하고-결과-확인하기)를 따른다. 다른 학습 방법을 작성하려면 별도 실험 폴더를 사용한다. 환경을 종료하면 실행 중인 학습도 중단된다.
 
 진행 중인 학습·저장이 끝난 뒤 환경을 갱신한다.
 
@@ -236,7 +236,7 @@ git restore --source=origin/develop -- Global/uv.lock
 git add Global/pyproject.toml Global/uv.lock Global/requirements.txt
 ```
 
-환경을 갱신한 뒤 `git status`로 충돌 파일을 확인하고 관련 팀원과 두 변경을 반영한다. 충돌 표시를 지운 뒤 수정한 파일을 `git add`한다. `git diff --check`, `./poc test`, `./poc shell -lc 'python Global/scripts/check_repository.py'`로 검사한다. 충돌 없이 병합된 경우도 검사하며, 실패하면 수정 후 다시 검사한다. 충돌을 해결했다면 `git commit`으로 병합을 마치고 `git push`한다. 최초 push는 `git push -u origin HEAD`를 사용한다.
+환경을 갱신한 뒤 [충돌 해결 절차](../../CONTRIBUTING.md#develop의-변경을-가져오거나-충돌을-해결할-때)에 따라 검사·병합 커밋·push한다.
 
 ## 기존 작업 파일 이동
 

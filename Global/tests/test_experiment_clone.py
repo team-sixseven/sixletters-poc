@@ -61,7 +61,7 @@ def test_clone_keeps_custom_code_settings_and_clears_notebooks(source):
     ):
         write(folder, name, b"never copy this")
     cloned = clone_experiment(folder, "연구자", "second", root=root)
-    settings = tomllib.loads(cloned.read_text())
+    settings = tomllib.loads(cloned.read_text(encoding="utf-8"))
     assert settings["experiment"]["name"] == "second"
     assert settings["experiment"]["owner"] == "연구자"
     assert (cloned.parent / "fit_free.py").read_bytes() == (folder / "fit_free.py").read_bytes()
@@ -134,7 +134,7 @@ def test_alternative_experiment_config_updates_identity_only(source):
     raw = (folder / "config.toml").read_bytes()
     write(folder, "config-variant.toml", raw.replace(b"C = 1.0", b"C = 2.0"))
     cloned = clone_experiment(folder, "연구자", "second", root=root)
-    alternative = tomllib.loads((cloned.parent / "config-variant.toml").read_text())
+    alternative = tomllib.loads((cloned.parent / "config-variant.toml").read_text(encoding="utf-8"))
     assert alternative["experiment"]["name"] == "second"
     assert alternative["parameters"]["C"] == 2.0
 
@@ -143,7 +143,10 @@ def test_clone_never_overwrites_existing_experiment(source):
     root, folder = source
     with pytest.raises(FileExistsError):
         clone_experiment(folder, "연구자", "first", root=root)
-    assert tomllib.loads((folder / "config.toml").read_text())["experiment"]["name"] == "first"
+    assert (
+        tomllib.loads((folder / "config.toml").read_text(encoding="utf-8"))["experiment"]["name"]
+        == "first"
+    )
 
 
 @pytest.mark.parametrize("name", ["helper.py", "configs/settings.yaml"])

@@ -86,7 +86,7 @@ def test_repository_check_rejects_small_patient_csv_added_outside_data_folders(
     assert main() == 1
     output = capsys.readouterr().out
     for path in paths:
-        assert f"{path}: CSV/TSV with patient identifier columns" in output
+        assert f"{path.as_posix()}: CSV/TSV with patient identifier columns" in output
 
 
 @pytest.mark.parametrize(
@@ -165,7 +165,7 @@ def test_git_add_does_not_bypass_value_guard_or_print_patient_values(tmp_path, m
     subprocess.run(["git", "add", str(path)], check=True)
     assert main() == 1
     output = capsys.readouterr().out
-    assert str(path) in output
+    assert path.as_posix() in output
     assert "patient identifier values" in output
     assert "P0001" not in output
 

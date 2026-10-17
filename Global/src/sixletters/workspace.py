@@ -272,7 +272,9 @@ def clone_experiment(
     name = validate_component(name, "name")
     source = _directory(source)
     validate_experiment_identity(source / "config.toml")
-    original_identity = tomllib.loads((source / "config.toml").read_text())["experiment"]
+    original_identity = tomllib.loads((source / "config.toml").read_text(encoding="utf-8"))[
+        "experiment"
+    ]
     root = Path(root).absolute()
     if any(path.is_symlink() for path in (root, *root.parents)):
         raise ValueError("Clone destination must not contain symbolic links")
