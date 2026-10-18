@@ -359,18 +359,21 @@ def connected_tracking_workspace(docker_workspace, server, *, purpose):
     try:
         run("docker", "compose", "up", "--build", "-d", "--wait", timeout=900)
         workspace_id = run("docker", "compose", "ps", "-q", "cpu").strip()
-        networks = json.loads(
-            run("docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", workspace_id)
-        )
-        network = next(iter(networks))
         server_id = server["run"]("ps", "-q", "tracking").strip()
-        run("docker", "network", "connect", "--alias", "tracking", network, server_id)
+        networks = json.loads(
+            run("docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", server_id)
+        )
+        assert len(networks) == 1
+        network = next(iter(networks))
+        # Keep the shared server on its original network across restarts. Moving
+        # it between temporary networks can invalidate Docker's published port.
+        run("docker", "network", "connect", network, workspace_id)
         connected = True
         yield workspace_id, experiment_id, (username, password)
     finally:
         settings.unlink(missing_ok=True)
         if connected:
-            run("docker", "network", "disconnect", network, server_id)
+            run("docker", "network", "disconnect", network, workspace_id)
 
 
 def train_retry_runs(workspace, run, *, owner_prefix, personal_packages=False):

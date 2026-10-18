@@ -44,6 +44,20 @@ class FakeClient:
         self.downloads = []
         self.create_count = 0
 
+    def bind(self, monkeypatch):
+        """Route both MLflow API boundaries to this fake server's storage."""
+        from mlflow import artifacts
+
+        monkeypatch.setattr(tracking, "_client", lambda uri: self)
+
+        def download(*, artifact_uri, dst_path, tracking_uri):
+            assert tracking_uri == tracking._configuration()[0]
+            parts = unquote(urlsplit(artifact_uri).path).lstrip("/").split("/")
+            assert parts[2] == "artifacts"
+            return self.download_artifacts(parts[1], "/".join(parts[3:]), dst_path)
+
+        monkeypatch.setattr(artifacts, "download_artifacts", download)
+
     def get_experiment_by_name(self, name):
         if self.offline:
             raise ConnectionError("Authorization: password=SECRET http://secret-server")
@@ -153,16 +167,7 @@ def setup_tracking(tmp_path, monkeypatch):
     model = tmp_path / "weights.txt"
     model.write_text("opaque model, never deserialize")
     client = FakeClient(tmp_path / "server")
-    monkeypatch.setattr(tracking, "_client", lambda uri: client)
-    from mlflow import artifacts
-
-    def download(*, artifact_uri, dst_path, tracking_uri):
-        assert tracking_uri == tracking._configuration()[0]
-        parts = unquote(urlsplit(artifact_uri).path).lstrip("/").split("/")
-        assert parts[2] == "artifacts"
-        return client.download_artifacts(parts[1], "/".join(parts[3:]), dst_path)
-
-    monkeypatch.setattr(artifacts, "download_artifacts", download)
+    client.bind(monkeypatch)
 
     def make_run(owner="팀원가", feature_set="clinical"):
         config = init_experiment(
@@ -676,10 +681,17 @@ def test_state_is_scoped_by_server_url(setup_tracking, monkeypatch):
     run = make_run()
     enable()
     assert tracking.auto_publish(run) == "uploaded"
+    first_download = tracking.fetch_runs(root)[0]
     second = FakeClient(root / "other-server")
     monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://second.example")
-    monkeypatch.setattr(tracking, "_client", lambda uri: second)
+    second.bind(monkeypatch)
     assert tracking.auto_publish(run) == "uploaded"
+    second_download = tracking.fetch_runs(root)[0]
+    assert first_download != second_download
+    assert len(first.downloads) == len(second.downloads) == 3
+    assert (first_download / "result.json").read_bytes() == (
+        second_download / "result.json"
+    ).read_bytes()
     assert first.create_count == second.create_count == 1
     assert len(list((root / ".tracking").iterdir())) == 2
 
