@@ -7,9 +7,12 @@ import pytest
 
 from scripts import ci_scope
 
-DOCS = {"tests": False, "tests_mode": "none", "smoke": False, "native": [], "docker": []}
-CODE = {"tests": True, "tests_mode": "full", "smoke": False, "native": [], "docker": []}
+EMPTY = {"test_files": [], "native_mode": "none", "native_tests": []}
+
+DOCS = {**EMPTY, "tests": False, "tests_mode": "none", "smoke": False, "native": [], "docker": []}
+CODE = {**EMPTY, "tests": True, "tests_mode": "full", "smoke": False, "native": [], "docker": []}
 WORKSPACE = {
+    **EMPTY,
     "tests": True,
     "tests_mode": "full",
     "smoke": True,
@@ -17,6 +20,7 @@ WORKSPACE = {
     "docker": ["workspace", "recovery"],
 }
 TRACKING = {
+    **EMPTY,
     "tests": True,
     "tests_mode": "full",
     "smoke": False,
@@ -26,6 +30,8 @@ TRACKING = {
 TRACKING_SERVER = {**TRACKING, "smoke": True}
 PERSONAL = {**CODE, "tests_mode": "personal"}
 FULL = {
+    **EMPTY,
+    "native_mode": "full",
     "tests": True,
     "tests_mode": "full",
     "smoke": True,
@@ -116,7 +122,20 @@ def test_server_changes_keep_recovery_and_tracking_integration(path):
     ],
 )
 def test_tracking_behavior_keeps_server_and_imported_recovery_fixture_coverage(path):
-    assert ci_scope.select_scope([path]) == TRACKING
+    scope = ci_scope.select_scope([path])
+    if path.startswith("Global/tests/"):
+        assert scope["tests_mode"] == "focused"
+        assert "Global/tests/test_docker_workflow.py" in scope["test_files"]
+        assert scope["docker"] == ci_scope.DOCKER
+    elif path == "Global/src/sixletters/reproduction.py":
+        assert scope == {
+            **TRACKING,
+            "native": ci_scope.NATIVE,
+            "native_mode": "focused",
+            "native_tests": ["Global/tests/test_reproduction.py"],
+        }
+    else:
+        assert scope == TRACKING
 
 
 @pytest.mark.parametrize(
@@ -128,7 +147,11 @@ def test_tracking_behavior_keeps_server_and_imported_recovery_fixture_coverage(p
     ],
 )
 def test_environment_check_changes_execute_the_check_without_native_or_container_builds(path):
-    assert ci_scope.select_scope([path]) == {**CODE, "smoke": True}
+    scope = ci_scope.select_scope([path])
+    if path.startswith("Global/tests/"):
+        assert scope == {**CODE, "tests_mode": "focused", "test_files": [path], "smoke": True}
+    else:
+        assert scope == {**CODE, "smoke": True}
 
 
 def test_comparison_changes_exercise_uploaded_results_without_workspace_rebuild():
@@ -161,7 +184,8 @@ def test_docker_test_changes_keep_the_suites_that_use_its_fixtures():
 def test_shared_experiment_and_fixture_changes_keep_all_container_consumers(path):
     scope = ci_scope.select_scope([path])
     assert scope["tests"] is True
-    assert scope["native"] == []
+    expects_native = path.endswith("conftest.py") or path in ci_scope.NATIVE_SOURCE_TESTS
+    assert scope["native"] == (ci_scope.NATIVE if expects_native else [])
     assert scope["docker"] == ["workspace", "recovery", "tracking"]
 
 
@@ -191,7 +215,7 @@ def test_dependency_validation_and_unrecognized_paths_require_full_checks(path):
 
 def test_mixed_changes_union_required_suites_without_reintroducing_native_checks():
     paths = ["README.md", "Global/Dockerfile", "Global/src/sixletters/tracking.py"]
-    expected = {**FULL, "native": []}
+    expected = {**FULL, "native": [], "native_mode": "none"}
     assert ci_scope.select_scope(paths) == expected
     assert ci_scope.select_scope(list(reversed(paths)) + paths) == expected
     assert ci_scope.select_scope([*paths, "Global/uv.lock"]) == FULL
@@ -359,6 +383,7 @@ def test_scope_command_appends_machine_readable_github_outputs(
     monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
     monkeypatch.setenv("GITHUB_OUTPUT", str(output_path))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
 
     ci_scope.main()
 
@@ -368,3 +393,139 @@ def test_scope_command_appends_machine_readable_github_outputs(
         key: json.loads(value) for key, value in (line.split("=", 1) for line in lines[1:])
     } == DOCS
     assert json.loads(capsys.readouterr().out) == DOCS
+
+
+def test_unit_test_edit_selects_consumers_without_repeating_unrelated_platforms():
+    scope = ci_scope.select_scope(["Global/tests/test_experiments.py"])
+    assert scope == {
+        **DOCS,
+        "tests": True,
+        "tests_mode": "focused",
+        "test_files": [
+            "Global/tests/test_comparison_diagnostics.py",
+            "Global/tests/test_comparison_uncertainty.py",
+            "Global/tests/test_experiments.py",
+        ],
+    }
+
+
+def test_file_lock_test_edit_keeps_focused_windows_and_macos_checks():
+    path = "Global/tests/test_personal_env.py"
+    scope = ci_scope.select_scope([path])
+    assert scope["tests_mode"] == scope["native_mode"] == "focused"
+    assert scope["test_files"] == scope["native_tests"] == [path]
+    assert scope["native"] == ci_scope.NATIVE
+    assert scope["docker"] == []
+
+
+def test_mixed_personal_and_test_edits_keep_both_validation_contracts():
+    scope = ci_scope.select_scope(["Members/member/train.py", "Global/tests/test_final_metrics.py"])
+    assert scope["tests_mode"] == "focused"
+    assert set(scope["test_files"]) == {
+        "Global/tests/test_final_metrics.py",
+        *ci_scope.PERSONAL_TESTS,
+    }
+
+
+@pytest.mark.parametrize("invalid", ["deleted", "helper", "syntax", "unknown_import", "plugin"])
+def test_uncertain_test_graph_falls_back_to_full_checks(tmp_path, invalid):
+    directory = tmp_path / "Global/tests"
+    directory.mkdir(parents=True)
+    changed = "Global/tests/test_changed.py"
+    (directory / "test_changed.py").write_text("def test_value():\n    assert True\n")
+    if invalid == "deleted":
+        (directory / "test_changed.py").unlink()
+    elif invalid == "helper":
+        changed = "Global/tests/helpers.py"
+        (directory / "helpers.py").write_text("VALUE = 1\n")
+    elif invalid == "syntax":
+        (directory / "test_changed.py").write_text("def test_value(\n")
+    elif invalid == "unknown_import":
+        (directory / "test_changed.py").write_text("from test_missing import helper\n")
+    else:
+        (directory / "test_changed.py").write_text('pytest_plugins = ["helpers"]\n')
+    assert ci_scope.select_scope([changed], root=tmp_path) == FULL
+
+
+def test_test_import_consumers_are_transitive(tmp_path):
+    directory = tmp_path / "Global/tests"
+    directory.mkdir(parents=True)
+    for name, source in {
+        "test_one.py": "VALUE = 1\n",
+        "test_two.py": "from test_one import VALUE\n",
+        "test_three.py": "import test_two\n",
+        "test_other.py": "VALUE = 2\n",
+    }.items():
+        (directory / name).write_text(source)
+    scope = ci_scope.select_scope(["Global/tests/test_one.py"], root=tmp_path)
+    assert scope["test_files"] == [
+        "Global/tests/test_one.py",
+        "Global/tests/test_three.py",
+        "Global/tests/test_two.py",
+    ]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        '\n[build-system]\nrequires = ["hatchling"]\n',
+        '\n[tool.pytest.ini_options]\naddopts = "-x"\n',
+        '\n[project.optional-dependencies]\necgs = ["wfdb"]\n',
+    ],
+)
+def test_registration_change_cannot_hide_build_test_or_dependency_changes(extra):
+    before = '[project]\nname = "fixture"\n[project.scripts]\nold = "package:main"\n'
+    after = before.replace("old =", "new =")
+    assert ci_scope.scripts_only_change(before, after)
+    assert not ci_scope.scripts_only_change(before, after + extra)
+    assert not ci_scope.scripts_only_change(before, after.replace('"fixture"', '"renamed"'))
+    assert not ci_scope.scripts_only_change(before, "not valid toml")
+
+
+def test_registered_command_change_runs_actual_entrypoint_and_workspace_tests():
+    scope = ci_scope.select_scope(["Global/pyproject.toml"], scripts_only=True)
+    assert scope == {
+        **DOCS,
+        "tests": True,
+        "tests_mode": "focused",
+        "test_files": sorted(ci_scope.CLI_TESTS),
+        "docker": ["workspace"],
+        "native": ci_scope.NATIVE,
+        "native_mode": "focused",
+        "native_tests": ["Global/tests/test_cli_registration.py"],
+    }
+    assert (
+        ci_scope.select_scope(["Global/pyproject.toml", "Global/uv.lock"], scripts_only=True)
+        == FULL
+    )
+
+
+def test_registration_diff_is_proven_against_pr_merge_base_not_latest_commit(history):
+    root, git, commit, _ = history
+    project = '[project]\nname = "fixture"\n[project.scripts]\nold = "package:main"\n'
+    baseline = {"Global/pyproject.toml": project}
+    baseline.update({name: "def test_help():\n    assert True\n" for name in ci_scope.CLI_TESTS})
+    base = commit(baseline)
+    git("switch", "-c", "feature")
+    commit({"Global/pyproject.toml": project.replace("old =", "new =")})
+    head = commit({"README.md": "Follow-up documentation\n"})
+    expected = ci_scope.select_scope(["Global/pyproject.toml"], root=root, scripts_only=True)
+    assert expected["tests_mode"] == "focused"
+    git("switch", "develop")
+    advanced = commit(
+        {"Global/pyproject.toml": project + '\n[dependency-groups]\ndev = ["pytest"]\n'}
+    )
+    # The checkout is the PR head/merge tree in CI; dependency changes on develop
+    # do not change the proven scripts-only delta on this branch.
+    git("switch", "feature")
+    assert ci_scope.event_scope("pull_request", pr_event(base, head)) == expected
+    assert ci_scope.event_scope("pull_request", pr_event(advanced, head)) == expected
+
+
+@pytest.mark.parametrize("source", sorted(ci_scope.NATIVE_SOURCE_TESTS))
+def test_platform_sensitive_sources_keep_focused_native_coverage(source):
+    scope = ci_scope.select_scope([source])
+    assert scope["tests_mode"] == "full"
+    assert scope["native_mode"] == "focused"
+    assert set(scope["native_tests"]) == ci_scope.NATIVE_SOURCE_TESTS[source]
+    assert scope["native"] == ci_scope.NATIVE

@@ -23,6 +23,8 @@ from test_tracking_docker import tracking_server  # noqa: F401
 from tornado.httpclient import HTTPRequest
 from tornado.websocket import websocket_connect
 
+from scripts.ci_docker_cache import prepare_prebuilt_image
+
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_DOCKER_TESTS") != "1",
     reason="Set RUN_DOCKER_TESTS=1 on a host with Docker to run container integration checks",
@@ -65,6 +67,7 @@ def docker_workspace(tmp_path_factory):
     compose_path.write_text(
         compose.replace("image: sixseven-poc:", f"image: {namespace}:"), encoding="utf-8"
     )
+    prebuilt_start = prepare_prebuilt_image(source, "workspace", f"{namespace}:cpu")
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         notebook_port = listener.getsockname()[1]
@@ -86,6 +89,11 @@ def docker_workspace(tmp_path_factory):
     environment.pop("COMPOSE_FILE", None)
 
     def run(*arguments, timeout=180, expected_returncode=0, error_output=False):
+        nonlocal prebuilt_start
+        if prebuilt_start and arguments[:3] == ("docker", "compose", "up"):
+            # Rebuild tests later in the suite must still exercise a real Compose build.
+            arguments = tuple("--no-build" if item == "--build" else item for item in arguments)
+            prebuilt_start = False
         completed = subprocess.run(
             arguments,
             cwd=workspace,

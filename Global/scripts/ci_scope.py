@@ -1,8 +1,11 @@
 """Select tests from the complete PR; keep data checks and integration boundaries explicit."""
 
+import ast
 import json
 import os
+import re
 import subprocess
+import tomllib
 from pathlib import Path, PurePosixPath
 
 NATIVE = ["windows-2025", "macos-26"]
@@ -17,6 +20,8 @@ DEPENDENCIES = {
 CI_FILES = {
     "Global/scripts/ci_scope.py",
     "Global/scripts/ci_validate.py",
+    "Global/scripts/ci_docker_cache.py",
+    "Global/tests/test_ci_docker_cache.py",
     "Global/scripts/verify_changes.py",
     "Global/tests/test_ci_scope.py",
     "Global/tests/test_ci_validation.py",
@@ -60,6 +65,51 @@ TRACKING_CLIENT = {
     "Global/src/sixletters/reproduction.py",
     "Global/tests/test_tracking_docker.py",  # Also supplies the recovery server fixture.
 }
+CLI_TESTS = {
+    "Global/tests/test_cli_registration.py",
+    "Global/tests/test_local_workflow.py",
+    "Global/tests/test_usability_commands.py",
+    "Global/tests/test_workspace_launcher.py",
+}
+# These tests exercise OS paths, process locks, interpreters or notebook kernels.
+NATIVE_TEST_WORDS = (
+    "environment",
+    "personal_env",
+    "execution",
+    "workspace",
+    "resources",
+    "notebook",
+    "local_workflow",
+    "layout",
+    "reproduction",
+)
+NATIVE_SOURCE_TESTS = {
+    "Global/src/sixletters/personal_env.py": {
+        "Global/tests/test_personal_env.py",
+        "Global/tests/test_personal_env_publication.py",
+        "Global/tests/test_notebook_environment.py",
+        "Global/tests/test_shared_environment_resources.py",
+    },
+    "Global/src/sixletters/notebook_workspace.py": {
+        "Global/tests/test_notebook_workspace.py",
+        "Global/tests/test_notebook_environment.py",
+    },
+    "Global/src/sixletters/execution.py": {
+        "Global/tests/test_execution_metadata.py",
+        "Global/tests/test_personal_environment_cli.py",
+    },
+    "Global/src/sixletters/local_settings.py": {"Global/tests/test_local_workflow.py"},
+    "Global/src/sixletters/workspace.py": {
+        "Global/tests/test_workspace.py",
+        "Global/tests/test_experiment_clone.py",
+    },
+    "Global/src/sixletters/experiment.py": {
+        "Global/tests/test_experiment_resources.py",
+        "Global/tests/test_model_resources.py",
+    },
+    "Global/src/sixletters/provenance.py": {"Global/tests/test_experiment_provenance.py"},
+    "Global/src/sixletters/reproduction.py": {"Global/tests/test_reproduction.py"},
+}
 SMOKE = {
     "Global/scripts/smoke_check.py",
     "Global/tests/test_smoke_check.py",
@@ -71,24 +121,161 @@ def full_scope() -> dict:
     return {
         "tests": True,
         "tests_mode": "full",
+        "test_files": [],
         "smoke": True,
         "native": NATIVE.copy(),
+        "native_mode": "full",
+        "native_tests": [],
         "docker": DOCKER.copy(),
     }
 
 
-def select_scope(paths: list[str], *, full: bool = False) -> dict:
+def scripts_only_change(before: str, after: str) -> bool:
+    """Only installed command registration may bypass dependency-wide validation."""
+    try:
+        old, new = tomllib.loads(before), tomllib.loads(after)
+        old_scripts = old["project"].pop("scripts", {})
+        new_scripts = new["project"].pop("scripts", {})
+        if not new_scripts or not isinstance(new_scripts, dict):
+            return False
+        for name, target in new_scripts.items():
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
+                return False
+            if not isinstance(target, str) or ":" not in target:
+                return False
+        return old == new and old_scripts != new_scripts
+    except (KeyError, TypeError, AttributeError, tomllib.TOMLDecodeError):
+        return False
+
+
+def registered_commands_changed(root: Path, before: str, after: str | None = None) -> bool:
+    """Compare the PR merge base with its head (or the current local file)."""
+
+    def contents(revision: str) -> str:
+        result = subprocess.run(
+            ["git", "show", f"{revision}:Global/pyproject.toml"],
+            cwd=root,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode:
+            raise ValueError("Cannot read project metadata")
+        return result.stdout.decode("utf-8")
+
+    try:
+        current = (
+            contents(after)
+            if after is not None
+            else (root / "Global/pyproject.toml").read_text(encoding="utf-8")
+        )
+        return scripts_only_change(contents(before), current)
+    except (OSError, ValueError, UnicodeError):
+        return False
+
+
+def affected_tests(root: Path, changed: set[str]) -> set[str] | None:
+    """Include transitive test-module consumers; uncertainty requires a full run."""
+    paths = sorted((root / "Global/tests").glob("test_*.py"))
+    modules = {path.stem: path.relative_to(root).as_posix() for path in paths}
+    known = set(modules.values())
+    if not changed <= known or any(path.is_symlink() for path in paths):
+        return None
+    dependencies = {}
+    try:
+        for path in paths:
+            imports = set()
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Name) and node.id == "pytest_plugins":
+                    return None
+                names = []
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    names = [node.module or "", *(alias.name for alias in node.names)]
+                elif isinstance(node, ast.Call) and (
+                    isinstance(node.func, ast.Name)
+                    and node.func.id == "__import__"
+                    or isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "import_module"
+                ):
+                    if not node.args or not isinstance(node.args[0], ast.Constant):
+                        return None
+                    names = [str(node.args[0].value)]
+                for name in names:
+                    for component in name.split("."):
+                        if component.startswith("test_"):
+                            if component not in modules:
+                                return None
+                            imports.add(modules[component])
+            dependencies[path.relative_to(root).as_posix()] = imports
+    except (OSError, UnicodeError, SyntaxError):
+        return None
+    selected = changed.copy()
+    while True:
+        expanded = selected | {name for name, imports in dependencies.items() if imports & selected}
+        if expanded == selected:
+            return selected
+        selected = expanded
+
+
+def select_scope(
+    paths: list[str],
+    *,
+    full: bool = False,
+    root: Path | None = None,
+    scripts_only: bool = False,
+) -> dict:
     if full or not paths:
+        return full_scope()
+    root = root or Path(__file__).resolve().parents[2]
+    if any(
+        path in CI_FILES
+        or path in {"Global/tests/conftest.py", "conftest.py"}
+        or path.startswith(".github/workflows/")
+        or path.startswith("Global/requirements/")
+        or path in DEPENDENCIES
+        and not (path == "Global/pyproject.toml" and scripts_only)
+        for path in paths
+    ):
+        return full_scope()
+    changed_tests = {path for path in paths if path.startswith("Global/tests/")}
+    selected = affected_tests(root, changed_tests) if changed_tests else set()
+    if selected is None:
         return full_scope()
     tests = smoke = personal = False
     suites = set()
-    for path in paths:
-        if (
-            path in DEPENDENCIES | CI_FILES
-            or path.startswith(".github/workflows/")
-            or path.startswith("Global/requirements/")
-        ):
+    native_tests = (
+        sorted(
+            name
+            for name in selected
+            if any(word in PurePosixPath(name).stem for word in NATIVE_TEST_WORDS)
+            and name
+            not in {
+                "Global/tests/test_docker_workflow.py",
+                "Global/tests/test_docker_workspace_copy.py",
+                "Global/tests/test_practice_execution.py",
+            }
+        )
+        if changed_tests
+        else []
+    )
+    if "Global/pyproject.toml" in paths and scripts_only:
+        if not all((root / name).is_file() for name in CLI_TESTS):
             return full_scope()
+        selected.update(CLI_TESTS)
+        suites.add("workspace")
+    native_selected = set(native_tests)
+    for path in paths:
+        native_selected.update(NATIVE_SOURCE_TESTS.get(path, set()))
+    if "Global/pyproject.toml" in paths and scripts_only:
+        native_selected.add("Global/tests/test_cli_registration.py")
+    if any(not (root / name).is_file() for name in native_selected):
+        return full_scope()
+    native_tests = sorted(native_selected)
+    for path in [*paths, *selected]:
+        if path == "Global/pyproject.toml" and scripts_only:
+            continue
         if (
             PurePosixPath(path).suffix.lower() in {".md", ".rst"}
             or path.startswith(".github/ISSUE_TEMPLATE/")
@@ -111,6 +298,14 @@ def select_scope(paths: list[str], *, full: bool = False) -> dict:
             )
         ):
             continue
+        if path.startswith("Global/tests/"):
+            if path == "Global/tests/test_docker_workflow.py":
+                suites.update(("workspace", "recovery"))
+            elif path == "Global/tests/test_tracking_docker.py":
+                suites.update(("recovery", "tracking"))
+            elif path == "Global/tests/test_smoke_check.py":
+                smoke = True
+            continue
         if path.startswith("Members/"):
             personal = True
         elif path in WORKSPACE_ENVIRONMENT:
@@ -128,31 +323,39 @@ def select_scope(paths: list[str], *, full: bool = False) -> dict:
         elif path == "Global/src/sixletters/comparison.py":
             tests = True
             suites.add("tracking")
-        elif path == "Global/tests/test_docker_workflow.py":
-            tests = True
-            suites.update(("workspace", "recovery"))
         elif path in SMOKE:
             tests = smoke = True
         elif path in {".pre-commit-config.yaml", ".gitignore"} or path.startswith(
-            (
-                "Global/src/",
-                "Global/scripts/",
-                "Global/tests/",
-                "Global/templates/",
-                "Global/notebooks/",
-            )
+            ("Global/src/", "Global/scripts/", "Global/templates/", "Global/notebooks/")
         ):
             tests = True
         else:
-            # Unclassified infrastructure must not silently bypass integration checks.
             return full_scope()
+    # Mixed personal and focused changes still exercise the shared personal contract.
+    if personal and selected:
+        selected.update(PERSONAL_TESTS)
+    mode = "full" if tests else "focused" if selected else "personal" if personal else "none"
     return {
-        "tests": tests or personal,
-        "tests_mode": "full" if tests else "personal" if personal else "none",
+        "tests": mode != "none",
+        "tests_mode": mode,
+        "test_files": sorted(selected) if mode == "focused" else [],
         "smoke": smoke,
-        "native": [],
+        "native": NATIVE.copy() if native_tests else [],
+        "native_mode": "focused" if native_tests else "none",
+        "native_tests": native_tests,
         "docker": [suite for suite in DOCKER if suite in suites],
     }
+
+
+# Shared by local verification and CI; never execute arbitrary contributor models.
+PERSONAL_TESTS = (
+    "Global/tests/test_data_contract.py",
+    "Global/tests/test_prepared.py",
+    "Global/tests/test_experiment_identity.py",
+    "Global/tests/test_personal_experiments.py",
+    "Global/tests/test_training_metadata.py",
+    "Global/tests/test_environment_comparison.py",
+)
 
 
 def event_scope(event_name: str, event: dict) -> dict:
@@ -176,7 +379,16 @@ def event_scope(event_name: str, event: dict) -> dict:
     if changed.returncode:
         return full_scope()
     paths = changed.stdout.decode("utf-8", errors="replace").rstrip("\0").split("\0")
-    return select_scope([path for path in paths if path])
+    root = Path.cwd()
+    ancestor = subprocess.run(
+        ["git", "merge-base", before, after],
+        capture_output=True,
+        check=False,
+    )
+    scripts_only = False
+    if ancestor.returncode == 0 and "Global/pyproject.toml" in paths:
+        scripts_only = registered_commands_changed(root, ancestor.stdout.decode().strip(), after)
+    return select_scope([path for path in paths if path], root=root, scripts_only=scripts_only)
 
 
 def main() -> None:
@@ -192,8 +404,9 @@ def main() -> None:
             "",
             "- Quality and repository file rules: required",
             f"- Linux tests: {scope['tests_mode']}",
+            f"- Focused test files: {', '.join(scope['test_files']) or 'not selected'}",
             f"- Environment smoke check: {'required' if scope['smoke'] else 'not selected'}",
-            f"- Native compatibility: {', '.join(scope['native']) or 'not selected'}",
+            f"- Native compatibility: {', '.join(scope['native']) or 'not selected'} ({scope['native_mode']})",
             f"- Docker integration: {', '.join(scope['docker']) or 'not selected'}",
         ]
         with Path(summary).open("a", encoding="utf-8") as handle:

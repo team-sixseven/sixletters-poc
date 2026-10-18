@@ -184,3 +184,68 @@ def test_staged_policy_uses_precommit_index_inspection_not_working_files(tmp_pat
     monkeypatch.setattr(verification.subprocess, "run", run)
     assert verification.verify(tmp_path, staged=True) == 0
     assert calls[0] == [verification.sys.executable, "-m", "pre_commit", "run"]
+
+
+def test_focused_test_command_only_accepts_explicit_repository_files():
+    files = ["Global/tests/test_personal_env.py", "Global/tests/test_experiments.py"]
+    command = verification.test_command("focused", files + files)
+    assert command[-2:] == sorted(files)
+    for invalid in [
+        [],
+        ["-x"],
+        ["Global/tests/../outside.py"],
+        ["Global/tests/test_one.py::test_case"],
+        "Global/tests/test_one.py",
+        [3],
+    ]:
+        with pytest.raises(ValueError, match="repository test files"):
+            verification.test_command("focused", invalid)
+    with pytest.raises(ValueError, match="only accepted"):
+        verification.test_command("full", files)
+
+
+def test_focused_runner_rejects_missing_or_outside_files(tmp_path, monkeypatch):
+    path = "Global/tests/test_selected.py"
+    with pytest.raises(ValueError, match="검사 파일"):
+        verification.run_tests(tmp_path, "focused", [path])
+    selected = tmp_path / path
+    selected.parent.mkdir(parents=True)
+    selected.symlink_to(tmp_path / "outside.py")
+    with pytest.raises(ValueError, match="검사 파일"):
+        verification.run_tests(tmp_path, "focused", [path])
+    selected.unlink()
+    selected.write_text("def test_example():\n    assert True\n")
+    calls = []
+    monkeypatch.setattr(
+        verification.subprocess,
+        "run",
+        lambda command, **kwargs: (
+            calls.append(command) or subprocess.CompletedProcess(command, 0)
+        ),
+    )
+    assert verification.run_tests(tmp_path, "focused", [path]) == 0
+    assert calls[0][-1] == path
+
+
+def test_local_registration_change_uses_same_semantic_selector_for_worktree_and_index(history):
+    root, git, write = history
+    project = '[project]\nname = "fixture"\n[project.scripts]\nold = "package:main"\n'
+    write("Global/pyproject.toml", project)
+    from scripts.ci_scope import CLI_TESTS
+
+    for name in CLI_TESTS:
+        write(name, "def test_help():\n    assert True\n")
+    git("add", ".")
+    git("commit", "--no-gpg-sign", "-m", "command baseline")
+    git("update-ref", "refs/remotes/origin/develop", "HEAD")
+    write("Global/pyproject.toml", project.replace("old =", "new ="))
+    changes = verification.changed_files(root)
+    assert verification.local_scope(root, changes)["tests_mode"] == "focused"
+    git("add", "Global/pyproject.toml")
+    staged = verification.changed_files(root, staged=True)
+    assert verification.local_scope(root, staged, staged=True)["tests_mode"] == "focused"
+    write(
+        "Global/pyproject.toml",
+        project.replace("old =", "new =") + '\n[dependency-groups]\ndev = ["pytest"]\n',
+    )
+    assert verification.local_scope(root, verification.changed_files(root))["tests_mode"] == "full"

@@ -17,6 +17,7 @@ from urllib.request import Request, urlopen
 import pandas as pd
 import pytest
 
+from scripts.ci_docker_cache import prepare_prebuilt_image
 from sixletters.comparison import compare_runs
 from sixletters.data.demo import make_demo_dataset
 from sixletters.data.prepared import save_prepared_dataset
@@ -48,6 +49,7 @@ def tracking_server(tmp_path_factory):
     compose_path.write_text(
         compose_path.read_text().replace("sixseven-poc:tracking", f"{namespace}:tracking")
     )
+    prebuilt_start = prepare_prebuilt_image(source, "tracking", f"{namespace}:tracking")
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
@@ -68,6 +70,10 @@ def tracking_server(tmp_path_factory):
     compose = ["docker", "compose", "-f", "compose.tracking.yaml"]
 
     def run(*arguments, timeout=180):
+        nonlocal prebuilt_start
+        if prebuilt_start and arguments[:1] == ("up",):
+            arguments = tuple("--no-build" if item == "--build" else item for item in arguments)
+            prebuilt_start = False
         completed = subprocess.run(
             [*compose, *arguments],
             cwd=workspace,
