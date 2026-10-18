@@ -6,6 +6,8 @@ authoritative; upload state and downloaded results live outside saved run bundle
 
 from __future__ import annotations
 
+# CI transfer scope probe.
+
 import json
 import math
 import os
