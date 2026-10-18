@@ -2,11 +2,11 @@
 
 Training never depends on tracking availability. The local completion marker stays
 authoritative; upload state and downloaded results live outside saved run bundles.
+
+CI transfer scope measurement.
 """
 
 from __future__ import annotations
-
-# CI transfer scope probe.
 
 import json
 import math
