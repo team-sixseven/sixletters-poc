@@ -62,6 +62,7 @@ def validate(needs: dict) -> None:
     tests_mode = _output(outputs, "tests_mode")
     test_files = _output(outputs, "test_files")
     native_mode = _output(outputs, "native_mode")
+    native_shard_count = _output(outputs, "native_shard_count")
     native_tests = _output(outputs, "native_tests")
     smoke = _output(outputs, "smoke")
     native = _output(outputs, "native")
@@ -78,6 +79,11 @@ def validate(needs: dict) -> None:
         raise ValueError("scope.outputs.native must be empty or the full native matrix.")
     if bool(native) != (native_mode != "none"):
         raise ValueError("scope.outputs.native_mode must match native selection.")
+    if (
+        type(native_shard_count) is not int
+        or native_shard_count not in {"none": (0,), "focused": (1, 2), "full": (4,)}[native_mode]
+    ):
+        raise ValueError("scope.outputs.native_shard_count must match the native test mode.")
     if (
         not isinstance(docker, list)
         or any(not isinstance(item, str) or item not in DOCKER for item in docker)

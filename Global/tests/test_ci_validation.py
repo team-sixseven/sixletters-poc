@@ -20,9 +20,13 @@ def workflow(
     test_files=None,
     native_mode=None,
     native_tests=None,
+    native_shard_count=None,
 ):
     native = [] if native is None else native
     docker = [] if docker is None else docker
+    native_mode = native_mode or ("full" if native else "none")
+    if native_shard_count is None:
+        native_shard_count = {"none": 0, "focused": 1, "full": 4}[native_mode]
     return {
         "checks": {"result": "success"},
         "linux": {"result": "success" if tests else "skipped"},
@@ -32,7 +36,8 @@ def workflow(
                 "tests": json.dumps(tests),
                 "tests_mode": json.dumps(tests_mode or ("full" if tests else "none")),
                 "test_files": json.dumps(test_files or []),
-                "native_mode": json.dumps(native_mode or ("full" if native else "none")),
+                "native_mode": json.dumps(native_mode),
+                "native_shard_count": json.dumps(native_shard_count),
                 "native_tests": json.dumps(native_tests or []),
                 "smoke": json.dumps(smoke),
                 "native": json.dumps(native),
@@ -107,6 +112,7 @@ def test_missing_job_or_result_is_not_a_success(job):
         "tests_mode",
         "test_files",
         "native_mode",
+        "native_shard_count",
         "native_tests",
         "smoke",
         "native",
@@ -128,6 +134,7 @@ def test_outputs_must_be_json_strings(name, value):
         "tests_mode",
         "test_files",
         "native_mode",
+        "native_shard_count",
         "native_tests",
         "smoke",
         "native",
@@ -332,4 +339,43 @@ def test_nonfocused_modes_cannot_smuggle_test_filters():
 def test_no_platform_jobs_requires_none_mode():
     needs = workflow(native_mode="full")
     with pytest.raises(ValueError, match="native_mode must match"):
+        ci_validate.validate(needs)
+
+
+@pytest.mark.parametrize("count", [1, 2])
+def test_focused_native_shards_require_complete_success(count):
+    needs = workflow(
+        native=ci_validate.NATIVE,
+        native_mode="focused",
+        native_tests=["Global/tests/test_personal_env.py"],
+        native_shard_count=count,
+    )
+    ci_validate.validate(needs)
+    for status in ("failure", "cancelled", "skipped", None):
+        needs["compatibility"]["result"] = status
+        with pytest.raises(ValueError, match="compatibility must report success"):
+            ci_validate.validate(needs)
+
+
+@pytest.mark.parametrize(
+    ("mode", "count"),
+    [
+        ("none", 1),
+        ("full", 1),
+        ("full", 2),
+        ("full", 0),
+        ("focused", 0),
+        ("focused", 4),
+        ("focused", True),
+        ("focused", "2"),
+    ],
+)
+def test_native_shard_count_cannot_reduce_full_checks_or_disagree_with_scope(mode, count):
+    needs = workflow(
+        native=ci_validate.NATIVE if mode != "none" else [],
+        native_mode=mode,
+        native_tests=["Global/tests/test_personal_env.py"] if mode == "focused" else [],
+        native_shard_count=count,
+    )
+    with pytest.raises(ValueError, match="native_shard_count"):
         ci_validate.validate(needs)

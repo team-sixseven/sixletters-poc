@@ -233,11 +233,20 @@ def test_invalid_or_partial_shard_options_fail_closed(options):
         verification.test_command("full", **options)
 
 
-@pytest.mark.parametrize("mode", ["none", "personal", "focused"])
-def test_only_full_tests_may_be_sharded(mode):
-    files = ["Global/tests/test_verification.py"] if mode == "focused" else None
-    with pytest.raises(ValueError, match="Only full tests"):
-        verification.test_command(mode, files, shard_index=0, shard_count=4)
+@pytest.mark.parametrize("mode", ["none", "personal"])
+def test_only_full_or_focused_tests_may_be_sharded(mode):
+    with pytest.raises(ValueError, match="Only full or focused tests"):
+        verification.test_command(mode, shard_index=0, shard_count=4)
+
+
+def test_focused_shards_keep_the_complete_explicit_file_list():
+    files = ["Global/tests/test_personal_env.py", "Global/tests/test_reproduction.py"]
+    command = verification.test_command("focused", files, shard_index=1, shard_count=2)
+    assert command[-len(files) :] == sorted(files)
+    assert command[command.index("--ci-shard-count") + 1] == "2"
+    assert command[command.index("--ci-shard-index") + 1] == "1"
+    assert "Global.scripts.ci_shards" in command
+    assert "Global.scripts.ci_shards" not in verification.test_command("focused", files)
 
 
 def test_shard_report_must_not_be_empty():

@@ -174,6 +174,7 @@ def full_scope() -> dict:
         "smoke": True,
         "native": NATIVE.copy(),
         "native_mode": "full",
+        "native_shard_count": 4,
         "native_tests": [],
         "docker": DOCKER.copy(),
     }
@@ -184,6 +185,7 @@ def pr_full_scope() -> dict:
     return {
         **full_scope(),
         "native_mode": "focused",
+        "native_shard_count": 2,
         "native_tests": NATIVE_FALLBACK_TESTS.copy(),
     }
 
@@ -402,6 +404,7 @@ def select_scope(
         "smoke": smoke,
         "native": NATIVE.copy() if native_tests else [],
         "native_mode": "focused" if native_tests else "none",
+        "native_shard_count": 1 if native_tests else 0,
         "native_tests": native_tests,
         "docker": [suite for suite in DOCKER_SUITES if suite in suites],
     }
@@ -469,7 +472,7 @@ def main() -> None:
             f"- Linux tests: {scope['tests_mode']}",
             f"- Focused test files: {', '.join(scope['test_files']) or 'not selected'}",
             f"- Environment smoke check: {'required' if scope['smoke'] else 'not selected'}",
-            f"- Native compatibility: {', '.join(scope['native']) or 'not selected'} ({scope['native_mode']})",
+            f"- Native compatibility: {', '.join(scope['native']) or 'not selected'} ({scope['native_mode']}; {scope['native_shard_count']} shards)",
             f"- Docker integration: {', '.join(scope['docker']) or 'not selected'}",
         ]
         with Path(summary).open("a", encoding="utf-8") as handle:

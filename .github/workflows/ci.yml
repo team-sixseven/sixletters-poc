@@ -25,6 +25,7 @@ jobs:
       tests_mode: ${{ steps.scope.outputs.tests_mode }}
       test_files: ${{ steps.scope.outputs.test_files }}
       native_mode: ${{ steps.scope.outputs.native_mode }}
+      native_shard_count: ${{ steps.scope.outputs.native_shard_count }}
       native_tests: ${{ steps.scope.outputs.native_tests }}
       smoke: ${{ steps.scope.outputs.smoke }}
       native: ${{ steps.scope.outputs.native }}
@@ -105,7 +106,7 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ fromJSON(needs.scope.outputs.native || '[]') }}
-        shard: ${{ fromJSON(needs.scope.outputs.native_mode == '"full"' && '[0,1,2,3]' || '[0]') }}
+        shard: ${{ fromJSON(needs.scope.outputs.native_shard_count == '4' && '[0,1,2,3]' || needs.scope.outputs.native_shard_count == '2' && '[0,1]' || '[0]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -119,9 +120,10 @@ jobs:
           TESTS_MODE: ${{ fromJSON(needs.scope.outputs.native_mode) }}
           TEST_FILES: ${{ needs.scope.outputs.native_tests }}
           SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_COUNT: ${{ needs.scope.outputs.native_shard_count }}
         run: |
-          if [[ "$TESTS_MODE" == full ]]; then
-            uv run --project Global --locked --no-sync python Global/scripts/verify_changes.py --tests-only full --shard-index "$SHARD_INDEX" --shard-count 4
+          if [[ "$SHARD_COUNT" != 1 ]]; then
+            uv run --project Global --locked --no-sync python Global/scripts/verify_changes.py --tests-only "$TESTS_MODE" --test-files "$TEST_FILES" --shard-index "$SHARD_INDEX" --shard-count "$SHARD_COUNT"
           else
             uv run --project Global --locked --no-sync python Global/scripts/verify_changes.py --tests-only "$TESTS_MODE" --test-files "$TEST_FILES"
           fi

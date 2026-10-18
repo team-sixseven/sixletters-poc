@@ -7,7 +7,7 @@ import pytest
 
 from scripts import ci_scope
 
-EMPTY = {"test_files": [], "native_mode": "none", "native_tests": []}
+EMPTY = {"test_files": [], "native_mode": "none", "native_shard_count": 0, "native_tests": []}
 
 DOCS = {**EMPTY, "tests": False, "tests_mode": "none", "smoke": False, "native": [], "docker": []}
 CODE = {**EMPTY, "tests": True, "tests_mode": "full", "smoke": False, "native": [], "docker": []}
@@ -40,6 +40,7 @@ PERSONAL = {**CODE, "tests_mode": "personal"}
 RELEASE = {
     **EMPTY,
     "native_mode": "full",
+    "native_shard_count": 4,
     "tests": True,
     "tests_mode": "full",
     "smoke": True,
@@ -59,6 +60,7 @@ RELEASE = {
 FULL = {
     **RELEASE,
     "native_mode": "focused",
+    "native_shard_count": 2,
     "native_tests": ci_scope.NATIVE_FALLBACK_TESTS,
 }
 
@@ -155,6 +157,7 @@ def test_tracking_behavior_keeps_server_and_imported_recovery_fixture_coverage(p
             "docker": ["member", "tracking"],
             "native": ci_scope.NATIVE,
             "native_mode": "focused",
+            "native_shard_count": 1,
             "native_tests": ["Global/tests/test_reproduction.py"],
         }
     else:
@@ -264,7 +267,7 @@ def test_dependency_validation_and_unrecognized_paths_require_full_checks(path):
 
 def test_mixed_changes_union_required_suites_without_reintroducing_native_checks():
     paths = ["README.md", "Global/Dockerfile", "Global/src/sixletters/tracking.py"]
-    expected = {**RELEASE, "native": [], "native_mode": "none"}
+    expected = {**RELEASE, "native": [], "native_mode": "none", "native_shard_count": 0}
     assert ci_scope.select_scope(paths) == expected
     assert ci_scope.select_scope(list(reversed(paths)) + paths) == expected
     assert ci_scope.select_scope([*paths, "Global/uv.lock"]) == FULL
@@ -544,6 +547,7 @@ def test_registered_command_change_runs_actual_entrypoint_and_fresh_terminal_tes
         "docker": ["cli"],
         "native": ci_scope.NATIVE,
         "native_mode": "focused",
+        "native_shard_count": 1,
         "native_tests": ["Global/tests/test_cli_registration.py"],
     }
     assert (
@@ -623,6 +627,7 @@ def test_platform_sensitive_sources_keep_focused_native_coverage(source):
     scope = ci_scope.select_scope([source])
     assert scope["tests_mode"] == "full"
     assert scope["native_mode"] == "focused"
+    assert scope["native_shard_count"] == 1
     assert set(scope["native_tests"]) == ci_scope.NATIVE_SOURCE_TESTS[source]
     assert scope["native"] == ci_scope.NATIVE
 
@@ -630,6 +635,7 @@ def test_platform_sensitive_sources_keep_focused_native_coverage(source):
 def test_develop_fallback_keeps_all_native_boundaries_but_not_full_os_suite():
     fallback = ci_scope.select_scope(["Global/uv.lock"])
     assert fallback["native_mode"] == "focused"
+    assert fallback["native_shard_count"] == 2
     assert fallback["native_tests"] == sorted(
         set().union(*ci_scope.NATIVE_SOURCE_TESTS.values(), ci_scope.CLI_TESTS)
     )
@@ -657,3 +663,24 @@ def test_native_fallback_names_existing_tests_without_docker_only_scenarios():
         assert (root / name).is_file(), name
         assert "docker" not in ci_scope.PurePosixPath(name).stem
     assert "Global/tests/test_evaluation.py" not in ci_scope.pr_full_scope()["native_tests"]
+
+
+@pytest.mark.parametrize(
+    ("paths", "scripts_only", "full", "count"),
+    [
+        (["README.md"], False, False, 0),
+        (["Members/alice/experiments/exp001/train.py"], False, False, 0),
+        (["Global/pyproject.toml"], True, False, 1),
+        (["Global/src/sixletters/personal_env.py"], False, False, 1),
+        (["Global/scripts/tracking_worker.py"], False, False, 0),
+        (["Global/uv.lock"], False, False, 2),
+        (["Global/scripts/ci_scope.py"], False, False, 2),
+        (["unknown/service.py"], False, False, 2),
+        (["README.md"], False, True, 4),
+    ],
+)
+def test_native_parallelism_follows_explicit_scope_not_test_count(paths, scripts_only, full, count):
+    assert (
+        ci_scope.select_scope(paths, scripts_only=scripts_only, full=full)["native_shard_count"]
+        == count
+    )

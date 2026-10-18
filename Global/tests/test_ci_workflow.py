@@ -20,13 +20,33 @@ def jobs():
 @pytest.mark.parametrize("job, mode", [("linux", "tests_mode"), ("compatibility", "native_mode")])
 def test_full_platform_matrix_requires_all_four_shards(jobs, job, mode):
     selected = jobs[job]
-    assert selected["strategy"]["matrix"]["shard"] == (
-        "${{ fromJSON(needs.scope.outputs." + mode + " == '\"full\"' && '[0,1,2,3]' || '[0]') }}"
-    )
+    if job == "linux":
+        assert selected["strategy"]["matrix"]["shard"] == (
+            "${{ fromJSON(needs.scope.outputs."
+            + mode
+            + " == '\"full\"' && '[0,1,2,3]' || '[0]') }}"
+        )
+    else:
+        assert selected["strategy"]["matrix"]["shard"] == (
+            "${{ fromJSON(needs.scope.outputs.native_shard_count == '4' && '[0,1,2,3]' "
+            "|| needs.scope.outputs.native_shard_count == '2' && '[0,1]' || '[0]') }}"
+        )
+        assert (
+            jobs["scope"]["outputs"]["native_shard_count"]
+            == "${{ steps.scope.outputs.native_shard_count }}"
+        )
     assert selected["strategy"]["fail-fast"] is False
     assert not selected.get("continue-on-error")
     command = next(step for step in selected["steps"] if "Run selected" in step.get("name", ""))
-    assert '--tests-only full --shard-index "$SHARD_INDEX" --shard-count 4' in command["run"]
+    if job == "linux":
+        assert '--tests-only full --shard-index "$SHARD_INDEX" --shard-count 4' in command["run"]
+    else:
+        assert (
+            '--tests-only "$TESTS_MODE" --test-files "$TEST_FILES" --shard-index "$SHARD_INDEX" --shard-count "$SHARD_COUNT"'
+            in command["run"]
+        )
+        assert 'if [[ "$SHARD_COUNT" != 1 ]]' in command["run"]
+        assert command["env"]["SHARD_COUNT"] == "${{ needs.scope.outputs.native_shard_count }}"
     assert command["env"]["SHARD_INDEX"] == "${{ matrix.shard }}"
     assert not command.get("if")
     assert not command.get("continue-on-error")

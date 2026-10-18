@@ -105,13 +105,13 @@ def test_command(
         raise ValueError("Test files are only accepted for focused verification")
     sharded = shard_index is not None or shard_count is not None or shard_report is not None
     if sharded and (
-        mode != "full"
+        mode not in {"full", "focused"}
         or type(shard_index) is not int
         or type(shard_count) is not int
         or shard_count < 2
         or not 0 <= shard_index < shard_count
     ):
-        raise ValueError("Only full tests accept a valid shard index and count together")
+        raise ValueError("Only full or focused tests accept a valid shard index and count together")
     if mode == "none":
         return None
     command = [sys.executable, "-m", "pytest", "-c", "Global/pyproject.toml", "-q"]
@@ -248,7 +248,7 @@ def main() -> int:
         if any(
             value is not None for value in (args.shard_index, args.shard_count, args.shard_report)
         ):
-            raise ValueError("Shard options require --tests-only full")
+            raise ValueError("Shard options require --tests-only full or focused")
         return verify(root, full=args.full, staged=args.staged, base=args.base)
     except (ValueError, OSError) as error:
         print(f"검증 실패: {error}", file=sys.stderr)
