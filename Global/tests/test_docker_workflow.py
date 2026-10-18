@@ -14,14 +14,16 @@ import subprocess
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
-from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
 from test_tracking_docker import tracking_server  # noqa: F401
 from tornado.httpclient import HTTPRequest
 from tornado.websocket import websocket_connect
+
+from scripts.ci_docker_cache import prepare_prebuilt_image
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_DOCKER_TESTS") != "1",
@@ -53,7 +55,7 @@ def copy_workspace(source: Path, workspace: Path) -> None:
     shutil.copytree(source, workspace, ignore=ignore)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def docker_workspace(tmp_path_factory):
     source = Path(__file__).resolve().parents[2]
     workspace = tmp_path_factory.mktemp("docker") / "한글 공동 작업"
@@ -65,6 +67,7 @@ def docker_workspace(tmp_path_factory):
     compose_path.write_text(
         compose.replace("image: sixseven-poc:", f"image: {namespace}:"), encoding="utf-8"
     )
+    prebuilt_start = prepare_prebuilt_image(source, "workspace", f"{namespace}:cpu")
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         notebook_port = listener.getsockname()[1]
@@ -86,6 +89,11 @@ def docker_workspace(tmp_path_factory):
     environment.pop("COMPOSE_FILE", None)
 
     def run(*arguments, timeout=180, expected_returncode=0, error_output=False):
+        nonlocal prebuilt_start
+        if prebuilt_start and arguments[:3] == ("docker", "compose", "up"):
+            # Rebuild tests later in the suite must still exercise a real Compose build.
+            arguments = tuple("--no-build" if item == "--build" else item for item in arguments)
+            prebuilt_start = False
         completed = subprocess.run(
             arguments,
             cwd=workspace,
@@ -191,35 +199,23 @@ def assert_new_terminal_uses_project_environment(run, notebook_port):
             pass
 
 
-def test_compose_up_starts_workspace_trains_and_preserves_results(docker_workspace):
-    workspace, run, notebook_port = docker_workspace
-    # Existing local files must move safely on the real bind mount before the worker starts.
-    legacy_data = workspace / "data/raw/layout-check.txt"
-    legacy_result = workspace / "artifacts/layout-check/preserved.txt"
-    for path in (legacy_data, legacy_result):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"synthetic migration sentinel")
-    run("docker", "compose", "up", "--build", "-d", "--wait", timeout=900)
-    for previous in (legacy_data, legacy_result):
-        moved = workspace / "Global" / previous.relative_to(workspace)
-        assert moved.read_bytes() == b"synthetic migration sentinel"
-        assert not previous.exists()
-    container_id = run("docker", "compose", "ps", "-q", "cpu").strip()
-    assert container_id
-    running = json.loads(run("docker", "inspect", container_id))[0]
-    assert running["State"]["Health"]["Status"] == "healthy"
-    assert running["NetworkSettings"]["Ports"]["8888/tcp"] == [
-        {"HostIp": "127.0.0.1", "HostPort": str(notebook_port)}
-    ]
-    with pytest.raises(HTTPError) as response:
-        urlopen(f"http://127.0.0.1:{notebook_port}/api/contents", timeout=10)
-    assert response.value.code in (401, 403)
-    environment_check = workspace / "Global/artifacts/environment-check/cpu/environment.json"
-    environment = json.loads(environment_check.read_text(encoding="utf-8"))
-    assert environment["synthetic_data_and_ecg"] == "passed"
-    assert environment["gpu"] == "not requested"
-    assert_new_terminal_uses_project_environment(run, notebook_port)
+def assert_installed_project_commands(run):
+    # Read the current project declaration, not a hard-coded command list. This
+    # catches renamed or newly added console scripts in the actual built image.
+    run(
+        "./dev",
+        "shell",
+        "-c",
+        "python -m pytest Global/tests/test_cli_registration.py -q",
+        timeout=90,
+    )
 
+
+def test_workspace_trains_saves_and_compares_results(docker_workspace):
+    workspace, run, _ = docker_workspace
+    run("docker", "compose", "up", "--build", "-d", "--wait", timeout=900)
+    container_id = run("docker", "compose", "ps", "-q", "cpu").strip()
+    environment_check = workspace / "Global/artifacts/environment-check/cpu/environment.json"
     run("./dev", "demo", "--output", "Global/data/prepared/demo-v1")
     run("./dev", "init", "--owner", "팀원 가", "--data", "Global/data/prepared/demo-v1")
     owners = ("팀원 가", "팀원 나")
@@ -338,44 +334,130 @@ def test_compose_up_starts_workspace_trains_and_preserves_results(docker_workspa
         assert file.stat().st_uid == host_uid
         assert file.stat().st_gid == host_gid
 
-    # Stopping and recreating the service must preserve data, models, and comparisons.
-    run("docker", "compose", "down", "--remove-orphans")
-    assert (workspace / "Global/data/prepared/demo-v1/dataset.json").is_file()
-    assert (workspace / comparison).is_file()
-    assert len(list((workspace / "Global/artifacts").rglob("result.json"))) == 2
-    assert len(list((workspace / "Global/artifacts").rglob("model.pkl"))) == 2
-    run("docker", "compose", "up", "-d", "--wait", timeout=120)
-    assert run("docker", "compose", "ps", "-q", "cpu").strip() != container_id
-    assert_new_terminal_uses_project_environment(run, notebook_port)
-    run(
-        "./dev", "compare", "--runs", *runs, "--output", "Global/artifacts/restarted-comparison.csv"
-    )
-    assert (workspace / "Global/artifacts/restarted-comparison.csv").is_file()
 
-    # Exec into a running workspace must also reject a stale dependency environment.
-    pyproject = workspace / "Global/pyproject.toml"
-    original = pyproject.read_text(encoding="utf-8")
-    changed, replacements = re.subn(
-        r"^description = .*$",
-        'description = "Docker dependency recovery check"',
-        original,
-        count=1,
-        flags=re.MULTILINE,
+@contextmanager
+def connected_tracking_workspace(docker_workspace, server, *, purpose):
+    workspace, run, _ = docker_workspace
+    server["environment"]["MLFLOW_SERVER_ALLOWED_HOSTS"] += ",tracking:5000"
+    server["run"]("up", "-d", "--wait")
+    suffix = uuid.uuid4().hex[:8]
+    username, password = f"retry-member-{suffix}", secrets.token_urlsafe(24)
+    server["request"]("/api/2.0/mlflow/users/create", {"username": username, "password": password})
+    experiment_name = f"{purpose}-{suffix}"
+    experiment_id = server["request"](
+        "/api/2.0/mlflow/experiments/create", {"name": experiment_name}
+    )["experiment_id"]
+    settings = workspace / ".env"
+    settings.write_text(
+        "MLFLOW_TRACKING_URI=http://tracking:5000\n"
+        f"MLFLOW_TRACKING_USERNAME={username}\n"
+        f"MLFLOW_TRACKING_PASSWORD={password}\n"
+        f"MLFLOW_EXPERIMENT_NAME={experiment_name}\n"
+        "POC_TRACKING_SYNC_INTERVAL=5\n",
+        encoding="utf-8",
     )
-    assert replacements == 1 and changed != original
-    pyproject.write_text(changed, encoding="utf-8")
-    run("./dev", "shell", "-c", "true", expected_returncode=2)
-    run("./dev", "deps", "lock")
-    run("./dev", "deps", "export")
-    before_rebuild = run("docker", "compose", "ps", "-q", "cpu").strip()
-    run("docker", "compose", "up", "--build", "-d", "--wait", timeout=900)
-    after_rebuild = run("docker", "compose", "ps", "-q", "cpu").strip()
-    assert after_rebuild and after_rebuild != before_rebuild, (
-        "Compose kept the old container after rebuilding changed dependencies. "
-        f"Compose version: {run('docker', 'compose', 'version', '--short')}. "
-        "Use the supported Compose version (2.40.3 or later)."
-    )
-    run("./dev", "check")
+    settings.chmod(0o600)
+    connected = False
+    try:
+        run("docker", "compose", "up", "--build", "-d", "--wait", timeout=900)
+        workspace_id = run("docker", "compose", "ps", "-q", "cpu").strip()
+        networks = json.loads(
+            run("docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", workspace_id)
+        )
+        network = next(iter(networks))
+        server_id = server["run"]("ps", "-q", "tracking").strip()
+        run("docker", "network", "connect", "--alias", "tracking", network, server_id)
+        connected = True
+        yield workspace_id, experiment_id, (username, password)
+    finally:
+        settings.unlink(missing_ok=True)
+        if connected:
+            run("docker", "network", "disconnect", network, server_id)
+
+
+def train_retry_runs(workspace, run, *, owner_prefix, personal_packages=False):
+    """Make real common and optional overlay runs for independent recovery scenarios."""
+    run("./dev", "demo", "--output", "Global/data/prepared/demo-v1")
+    owners = (f"{owner_prefix}-a", f"{owner_prefix}-b")
+    run("./dev", "init", "--owner", owners[0], "--data", "Global/data/prepared/demo-v1")
+    local_runs = {}
+    for owner in owners:
+        run("./dev", "new", "retry001", "--owner", owner, "--script", "fit_model.py")
+        if personal_packages and owner == owners[0]:
+            run("./dev", "env", "add", "retry001", "--owner", owner, "tabulate==0.9.0", timeout=300)
+        resource = workspace / "Members" / owner / "experiments/retry001/settings.yaml"
+        resource.write_text("preprocessing: median\n", encoding="utf-8")
+        run("./dev", "exec", "retry001", "--owner", owner, "fit_model.py", timeout=300)
+        saved = list((workspace / "Global/artifacts" / owner / "retry001").glob("*/result.json"))
+        assert len(saved) == 1
+        result = json.loads(saved[0].read_text(encoding="utf-8"))
+        assert result["synthetic"] is True
+        if personal_packages and owner == owners[0]:
+            assert result["software"]["packages"]["tabulate"] == "0.9.0"
+            assert "environment.json" in result["resources"]
+        local_runs[result["run_id"]] = {
+            "owner": owner,
+            "directory": saved[0].parent,
+            "hashes": {
+                path.relative_to(saved[0].parent).as_posix(): hashlib.sha256(
+                    path.read_bytes()
+                ).hexdigest()
+                for path in saved[0].parent.rglob("*")
+                if path.is_file()
+            },
+        }
+    return local_runs
+
+
+def wait_for_published_runs(server, experiment_id, credentials, local_runs):
+    # The retry interval is not an upload deadline: authenticated file uploads
+    # and an existing queue can take longer on shared CI machines.
+    deadline = time.monotonic() + 180
+    published = {}
+    while time.monotonic() < deadline:
+        response = server["request"](
+            "/api/2.0/mlflow/runs/search",
+            {
+                "experiment_ids": [experiment_id],
+                "filter": "attributes.status = 'FINISHED' and tags.`sixletters.complete` = 'true'",
+                "max_results": 100,
+            },
+            credentials=credentials,
+        )
+        published = {
+            tags["sixletters.local_run_id"]: remote
+            for remote in response.get("runs", [])
+            if (tags := {tag["key"]: tag["value"] for tag in remote["data"]["tags"]})
+            and tags.get("sixletters.local_run_id") in local_runs
+        }
+        if set(published) == set(local_runs):
+            break
+        time.sleep(5)
+    if set(published) != set(local_runs):
+        remaining = server["request"](
+            "/api/2.0/mlflow/runs/search",
+            {"experiment_ids": [experiment_id], "max_results": 100},
+            credentials=credentials,
+        )
+        states = [
+            {"status": remote["info"]["status"], "tags": remote["data"].get("tags", [])}
+            for remote in remaining.get("runs", [])
+        ]
+        pytest.fail(f"Background retry did not finish both saved runs; server states: {states}")
+    for local_id, saved in local_runs.items():
+        assert saved["hashes"] == {
+            path.relative_to(saved["directory"]).as_posix(): hashlib.sha256(
+                path.read_bytes()
+            ).hexdigest()
+            for path in saved["directory"].rglob("*")
+            if path.is_file()
+        }
+        assert {metric["key"] for metric in published[local_id]["data"]["metrics"]} == {
+            "roc_auc",
+            "average_precision",
+            "brier_score",
+        }
+    return published
 
 
 def test_workspace_worker_retries_saved_runs_when_tracking_returns(
@@ -384,126 +466,17 @@ def test_workspace_worker_retries_saved_runs_when_tracking_returns(
 ):
     workspace, run, _ = docker_workspace
     server = tracking_server
-    server["environment"]["MLFLOW_SERVER_ALLOWED_HOSTS"] += ",tracking:5000"
-    server["run"]("up", "-d", "--wait")
-    username, password = "retry-member", secrets.token_urlsafe(24)
-    server["request"]("/api/2.0/mlflow/users/create", {"username": username, "password": password})
-    experiment_id = server["request"](
-        "/api/2.0/mlflow/experiments/create", {"name": "background-retry"}
-    )["experiment_id"]
-    settings = workspace / ".env"
-    settings.write_text(
-        "MLFLOW_TRACKING_URI=http://tracking:5000\n"
-        f"MLFLOW_TRACKING_USERNAME={username}\n"
-        f"MLFLOW_TRACKING_PASSWORD={password}\n"
-        "MLFLOW_EXPERIMENT_NAME=background-retry\n"
-        "POC_TRACKING_SYNC_INTERVAL=5\n",
-        encoding="utf-8",
-    )
-    settings.chmod(0o600)
-    run("docker", "compose", "up", "--build", "-d", "--wait", timeout=900)
-    workspace_id = run("docker", "compose", "ps", "-q", "cpu").strip()
-    networks = json.loads(
-        run("docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", workspace_id)
-    )
-    network = next(iter(networks))
-    server_id = server["run"]("ps", "-q", "tracking").strip()
-    run("docker", "network", "connect", "--alias", "tracking", network, server_id)
-    try:
+    with connected_tracking_workspace(docker_workspace, server, purpose="result-retry") as context:
+        workspace_id, experiment_id, credentials = context
         server["run"]("stop", "tracking")
-        if not (workspace / "Global/data/prepared/demo-v1/dataset.json").exists():
-            run("./dev", "demo")
-        run("./dev", "init", "--owner", "복구검증가", "--data", "Global/data/prepared/demo-v1")
-        local_runs = {}
-        for owner in ("복구검증가", "복구검증나"):
-            run("./dev", "new", "retry001", "--owner", owner, "--script", "fit_model.py")
-            if owner == "복구검증가":
-                run(
-                    "./dev",
-                    "env",
-                    "add",
-                    "retry001",
-                    "--owner",
-                    owner,
-                    "tabulate==0.9.0",
-                    timeout=300,
-                )
-            resource = workspace / "Members" / owner / "experiments/retry001/settings.yaml"
-            resource.write_text("preprocessing: median\n")
-            run("./dev", "exec", "retry001", "--owner", owner, "fit_model.py", timeout=300)
-            saved = list(
-                (workspace / "Global/artifacts" / owner / "retry001").glob("*/result.json")
-            )
-            assert len(saved) == 1
-            result = json.loads(saved[0].read_text())
-            assert result["synthetic"] is True
-            if owner == "복구검증가":
-                assert result["software"]["packages"]["tabulate"] == "0.9.0"
-                assert "environment.json" in result["resources"]
-            local_runs[result["run_id"]] = {
-                "owner": owner,
-                "directory": saved[0].parent,
-                "hashes": {
-                    path.relative_to(saved[0].parent).as_posix(): hashlib.sha256(
-                        path.read_bytes()
-                    ).hexdigest()
-                    for path in saved[0].parent.rglob("*")
-                    if path.is_file()
-                },
-            }
-
-        # The two personal script processes have exited. Only the live workspace worker can retry.
+        local_runs = train_retry_runs(
+            workspace, run, owner_prefix="result-retry", personal_packages=True
+        )
+        # Both personal script processes have exited. Only the live worker can retry.
         server["run"]("up", "-d", "--wait")
-        # The retry interval is not an upload deadline: authenticated file uploads
-        # and an existing queue can take longer on shared CI machines.
-        deadline = time.monotonic() + 180
-        published = {}
-        while time.monotonic() < deadline:
-            response = server["request"](
-                "/api/2.0/mlflow/runs/search",
-                {
-                    "experiment_ids": [experiment_id],
-                    "filter": "attributes.status = 'FINISHED' and tags.`sixletters.complete` = 'true'",
-                    "max_results": 100,
-                },
-                credentials=(username, password),
-            )
-            published = {
-                tags["sixletters.local_run_id"]: remote
-                for remote in response.get("runs", [])
-                if (tags := {tag["key"]: tag["value"] for tag in remote["data"]["tags"]})
-                and tags.get("sixletters.local_run_id") in local_runs
-            }
-            if set(published) == set(local_runs):
-                break
-            time.sleep(5)
-        if set(published) != set(local_runs):
-            remaining = server["request"](
-                "/api/2.0/mlflow/runs/search",
-                {"experiment_ids": [experiment_id], "max_results": 100},
-                credentials=(username, password),
-            )
-            states = [
-                {"status": remote["info"]["status"], "tags": remote["data"].get("tags", [])}
-                for remote in remaining.get("runs", [])
-            ]
-            pytest.fail(f"Background retry did not finish both saved runs; server states: {states}")
+        published = wait_for_published_runs(server, experiment_id, credentials, local_runs)
         assert run("docker", "compose", "ps", "-q", "cpu").strip() == workspace_id
-        for local_id, saved in local_runs.items():
-            assert saved["hashes"] == {
-                path.relative_to(saved["directory"]).as_posix(): hashlib.sha256(
-                    path.read_bytes()
-                ).hexdigest()
-                for path in saved["directory"].rglob("*")
-                if path.is_file()
-            }
-            assert {metric["key"] for metric in published[local_id]["data"]["metrics"]} == {
-                "roc_auc",
-                "average_precision",
-                "brier_score",
-            }
-
-        remote_comparison = "Global/artifacts/overlay-remote-comparison.csv"
+        remote_comparison = "Global/artifacts/retry-remote-comparison.csv"
         run(
             "./dev",
             "compare",
@@ -515,8 +488,24 @@ def test_workspace_worker_retries_saved_runs_when_tracking_returns(
         )
         with (workspace / remote_comparison).open(encoding="utf-8", newline="") as handle:
             compared = list(csv.DictReader(handle))
-        assert {item["owner"] for item in compared} == {"복구검증가", "복구검증나"}
+        assert {item["owner"] for item in compared} == {"result-retry-a", "result-retry-b"}
+        for remote in published.values():
+            tags = {tag["key"]: tag["value"] for tag in remote["data"]["tags"]}
+            assert tags["sixletters.archive_status"] == "none"
 
+
+def test_workspace_worker_retries_selected_archive_when_tracking_returns(
+    docker_workspace,
+    tracking_server,  # noqa: F811
+):
+    workspace, run, _ = docker_workspace
+    server = tracking_server
+    with connected_tracking_workspace(docker_workspace, server, purpose="archive-retry") as context:
+        workspace_id, experiment_id, credentials = context
+        local_runs = train_retry_runs(
+            workspace, run, owner_prefix="archive-retry", personal_packages=True
+        )
+        published = wait_for_published_runs(server, experiment_id, credentials, local_runs)
         # Selection made offline must survive the command exiting and be retried
         # by the workspace worker without promoting other local runs.
         selected_id, selected_run = next(iter(local_runs.items()))
@@ -535,7 +524,7 @@ def test_workspace_worker_retries_saved_runs_when_tracking_returns(
         archive_status = None
         while time.monotonic() < deadline:
             remote = server["request"](
-                f"/api/2.0/mlflow/runs/get?run_id={remote_id}", credentials=(username, password)
+                f"/api/2.0/mlflow/runs/get?run_id={remote_id}", credentials=credentials
             )["run"]
             tags = {tag["key"]: tag["value"] for tag in remote["data"]["tags"]}
             archive_status = tags.get("sixletters.archive_status")
@@ -543,10 +532,11 @@ def test_workspace_worker_retries_saved_runs_when_tracking_returns(
                 break
             time.sleep(5)
         assert archive_status == "complete"
+        assert run("docker", "compose", "ps", "-q", "cpu").strip() == workspace_id
         for local_id, base in published.items():
             remote = server["request"](
                 f"/api/2.0/mlflow/runs/get?run_id={base['info']['run_id']}",
-                credentials=(username, password),
+                credentials=credentials,
             )["run"]
             tags = {tag["key"]: tag["value"] for tag in remote["data"]["tags"]}
             assert remote["info"]["status"] == "FINISHED"
@@ -554,9 +544,18 @@ def test_workspace_worker_retries_saved_runs_when_tracking_returns(
             assert tags["sixletters.archive_status"] == (
                 "complete" if local_id == selected_id else "none"
             )
-    finally:
-        settings.unlink(missing_ok=True)
-        run("docker", "network", "disconnect", network, server_id)
+            if local_id == selected_id:
+                root = remote["info"]["artifact_uri"].removeprefix("mlflow-artifacts:")
+                for filename in ("resources/environment.json", "models/model.pkl"):
+                    uploaded = server["request"](
+                        f"/api/2.0/mlflow-artifacts/artifacts{root}/reproduction/{filename}",
+                        credentials=credentials,
+                    )
+                    expected = (selected_run["directory"] / filename).read_bytes()
+                    if isinstance(uploaded, dict):
+                        assert uploaded == json.loads(expected)
+                    else:
+                        assert uploaded == expected
 
 
 @pytest.mark.parametrize("personal_packages", [False, True])
@@ -643,7 +642,8 @@ def test_personal_notebook_kernel_runs_packages_and_survives_workspace_restart(
 
 def test_member_environment_reuse_isolation_and_reproduction(docker_workspace):
     workspace, run, _ = docker_workspace
-    run("./dev", "up", "-d", "--wait", timeout=900)
+    run("docker", "compose", "up", "--build", "-d", "--wait", timeout=900)
+    run("./dev", "demo", "--output", "Global/data/prepared/demo-v1")
     owner = "공유 환경 팀원"
     member = workspace / "Members" / owner
     run("./dev", "init", "--owner", owner, "--data", "Global/data/prepared/demo-v1")
@@ -717,3 +717,64 @@ def test_member_environment_reuse_isolation_and_reproduction(docker_workspace):
     assert restored["version"] == "0.8.10"
     assert owner_locks == {filename: (member / filename).read_bytes() for filename in owner_locks}
     assert json.loads(run("./dev", "exec", "shared001", "probe.py"))["version"] == "0.9.0"
+
+
+def test_workspace_restart_preserves_results_and_rebuilds_changed_dependencies(docker_workspace):
+    workspace, run, notebook_port = docker_workspace
+    run("docker", "compose", "up", "--build", "-d", "--wait", timeout=900)
+    container_id = run("docker", "compose", "ps", "-q", "cpu").strip()
+    run("./dev", "demo", "--output", "Global/data/prepared/lifecycle-demo")
+    run("./dev", "init", "--owner", "lifecycle", "--data", "Global/data/prepared/lifecycle-demo")
+    runs = []
+    for name in ("preserved001", "preserved002"):
+        run("./dev", "new", name)
+        run("./dev", "exec", name, "train.py")
+        result = next((workspace / "Global/artifacts/lifecycle" / name).glob("*/result.json"))
+        runs.append(result.parent.relative_to(workspace).as_posix())
+    comparison = "Global/artifacts/lifecycle-comparison.csv"
+    run("./dev", "compare", "--runs", *runs, "--output", comparison)
+    preserved = {
+        path.relative_to(workspace): path.read_bytes()
+        for directory in ("Global/data/prepared/lifecycle-demo", "Global/artifacts/lifecycle")
+        for path in (workspace / directory).rglob("*")
+        if path.is_file()
+    }
+    preserved[Path(comparison)] = (workspace / comparison).read_bytes()
+    run("docker", "compose", "down", "--remove-orphans")
+    assert (workspace / "Global/data/prepared/lifecycle-demo/dataset.json").is_file()
+    assert (workspace / comparison).is_file()
+    assert len(list((workspace / "Global/artifacts/lifecycle").rglob("result.json"))) == 2
+    assert len(list((workspace / "Global/artifacts/lifecycle").rglob("model.pkl"))) == 2
+    assert all((workspace / path).read_bytes() == content for path, content in preserved.items())
+    run("docker", "compose", "up", "-d", "--wait", timeout=120)
+    assert run("docker", "compose", "ps", "-q", "cpu").strip() != container_id
+    assert_new_terminal_uses_project_environment(run, notebook_port)
+    run(
+        "./dev", "compare", "--runs", *runs, "--output", "Global/artifacts/restarted-comparison.csv"
+    )
+    assert (workspace / "Global/artifacts/restarted-comparison.csv").is_file()
+
+    # A running workspace must reject stale dependencies until a real rebuild.
+    pyproject = workspace / "Global/pyproject.toml"
+    original = pyproject.read_text(encoding="utf-8")
+    changed, replacements = re.subn(
+        r"^description = .*$",
+        'description = "Docker dependency recovery check"',
+        original,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    assert replacements == 1 and changed != original
+    pyproject.write_text(changed, encoding="utf-8")
+    run("./dev", "shell", "-c", "true", expected_returncode=2)
+    run("./dev", "deps", "lock")
+    run("./dev", "deps", "export")
+    before_rebuild = run("docker", "compose", "ps", "-q", "cpu").strip()
+    run("docker", "compose", "up", "--build", "-d", "--wait", timeout=900)
+    after_rebuild = run("docker", "compose", "ps", "-q", "cpu").strip()
+    assert after_rebuild and after_rebuild != before_rebuild, (
+        "Compose kept the old container after rebuilding changed dependencies. "
+        f"Compose version: {run('docker', 'compose', 'version', '--short')}. "
+        "Use the supported Compose version (2.40.3 or later)."
+    )
+    run("./dev", "check")

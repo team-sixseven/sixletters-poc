@@ -1,8 +1,6 @@
 name: Team checks
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main, develop]
     types: [opened, synchronize, reopened, edited]
@@ -17,12 +15,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  checks:
+  scope:
     if: github.event_name != 'pull_request' || github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-24.04
     outputs:
       tests: ${{ steps.scope.outputs.tests }}
       tests_mode: ${{ steps.scope.outputs.tests_mode }}
+      test_files: ${{ steps.scope.outputs.test_files }}
+      native_mode: ${{ steps.scope.outputs.native_mode }}
+      native_shard_count: ${{ steps.scope.outputs.native_shard_count }}
+      native_tests: ${{ steps.scope.outputs.native_tests }}
       smoke: ${{ steps.scope.outputs.smoke }}
       native: ${{ steps.scope.outputs.native }}
       docker: ${{ steps.scope.outputs.docker }}
@@ -45,43 +47,64 @@ jobs:
       - name: Select checks
         id: scope
         run: python Global/scripts/ci_scope.py
+
+  checks:
+    needs: scope
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "0.9.26"
           enable-cache: true
-      - name: Install check dependencies
-        env:
-          TESTS_MODE: ${{ fromJSON(steps.scope.outputs.tests_mode) }}
-        run: |
-          if [[ "$TESTS_MODE" == full ]]; then
-            uv sync --project Global --locked --extra ecg
-          else
-            uv sync --project Global --locked
-          fi
+      - run: uv sync --project Global --locked
       - name: Check code quality and tracked files
         run: uv run --project Global --locked --no-sync pre-commit run --all-files --show-diff-on-failure
         env:
           SKIP: no-commit-to-branch
       - run: uv export --project Global --locked --no-dev --no-emit-project --output-file Global/requirements.txt
       - run: git diff --exit-code
-      - name: Run Linux regression tests
-        if: steps.scope.outputs.tests == 'true'
-        env:
-          TESTS_MODE: ${{ fromJSON(steps.scope.outputs.tests_mode) }}
-        run: uv run --project Global --locked --no-sync python Global/scripts/verify_changes.py --tests-only "$TESTS_MODE"
-      - name: Check environment and notebook
-        if: steps.scope.outputs.smoke == 'true'
-        run: |
-          uv run --project Global --locked --extra ecg python Global/scripts/smoke_check.py --ecg
-          uv run --project Global --locked --extra ecg jupyter nbconvert --to notebook --execute Global/notebooks/00_environment_check.ipynb --output-dir Global/artifacts/notebook-check
 
-  compatibility:
-    needs: checks
-    if: needs.checks.outputs.native != '[]'
+  linux:
+    needs: scope
+    if: needs.scope.outputs.tests == 'true'
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(needs.checks.outputs.native || '[]') }}
+        shard: ${{ fromJSON(needs.scope.outputs.tests_mode == '"full"' && '[0,1,2,3]' || '[0]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.9.26"
+          enable-cache: true
+      - run: uv sync --project Global --locked --extra ecg
+      - name: Run selected Linux tests
+        env:
+          TESTS_MODE: ${{ fromJSON(needs.scope.outputs.tests_mode) }}
+          TEST_FILES: ${{ needs.scope.outputs.test_files }}
+          SHARD_INDEX: ${{ matrix.shard }}
+        run: |
+          if [[ "$TESTS_MODE" == full ]]; then
+            uv run --project Global --locked --no-sync python Global/scripts/verify_changes.py --tests-only full --shard-index "$SHARD_INDEX" --shard-count 4
+          else
+            uv run --project Global --locked --no-sync python Global/scripts/verify_changes.py --tests-only "$TESTS_MODE" --test-files "$TEST_FILES"
+          fi
+      - name: Check environment and notebook
+        if: needs.scope.outputs.smoke == 'true' && matrix.shard == 0
+        run: |
+          uv run --project Global --locked --no-sync python Global/scripts/smoke_check.py --ecg
+          uv run --project Global --locked --no-sync jupyter nbconvert --to notebook --execute Global/notebooks/00_environment_check.ipynb --output-dir Global/artifacts/notebook-check
+
+  compatibility:
+    needs: scope
+    if: needs.scope.outputs.native != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.scope.outputs.native || '[]') }}
+        shard: ${{ fromJSON(needs.scope.outputs.native_shard_count == '4' && '[0,1,2,3]' || needs.scope.outputs.native_shard_count == '2' && '[0,1]' || '[0]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -90,25 +113,78 @@ jobs:
           version: "0.9.26"
           enable-cache: true
       - run: uv sync --project Global --locked --extra ecg
-      - run: uv run --project Global --locked --extra ecg pytest -c Global/pyproject.toml -q
-      - run: uv run --project Global --locked --extra ecg python Global/scripts/smoke_check.py --ecg
-      - run: uv run --project Global --locked --extra ecg jupyter nbconvert --to notebook --execute Global/notebooks/00_environment_check.ipynb --output-dir Global/artifacts/notebook-check
+      - name: Run selected platform tests
+        env:
+          TESTS_MODE: ${{ fromJSON(needs.scope.outputs.native_mode) }}
+          TEST_FILES: ${{ needs.scope.outputs.native_tests }}
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_COUNT: ${{ needs.scope.outputs.native_shard_count }}
+        run: |
+          if [[ "$SHARD_COUNT" != 1 ]]; then
+            uv run --project Global --locked --no-sync python Global/scripts/verify_changes.py --tests-only "$TESTS_MODE" --test-files "$TEST_FILES" --shard-index "$SHARD_INDEX" --shard-count "$SHARD_COUNT"
+          else
+            uv run --project Global --locked --no-sync python Global/scripts/verify_changes.py --tests-only "$TESTS_MODE" --test-files "$TEST_FILES"
+          fi
+        shell: bash
+      - name: Check full environment and notebook
+        if: needs.scope.outputs.native_mode == '"full"' && matrix.shard == 0
+        shell: bash
+        run: |
+          uv run --project Global --locked --no-sync python Global/scripts/smoke_check.py --ecg
+          uv run --project Global --locked --no-sync jupyter nbconvert --to notebook --execute Global/notebooks/00_environment_check.ipynb --output-dir Global/artifacts/notebook-check
 
   docker:
-    needs: checks
-    if: needs.checks.outputs.docker != '[]'
+    needs: scope
+    if: needs.scope.outputs.docker != '[]'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        suite: ${{ fromJSON(needs.checks.outputs.docker || '[]') }}
+        suite: ${{ fromJSON(needs.scope.outputs.docker || '[]') }}
     name: docker (${{ matrix.suite }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-compose-action@54042514f505b273907334ae2b9cdbb9a0213c1a # v2.4.0
         with:
           version: "v2.40.3"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        id: buildx
+      - name: Fingerprint Docker build inputs
+        id: docker_inputs
+        run: python Global/scripts/ci_docker_cache.py
+      - name: Build cached workspace image
+        id: workspace_image
+        if: matrix.suite != 'tracking'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Global/Dockerfile
+          target: cpu
+          load: true
+          tags: sixseven-ci:cpu
+          labels: io.sixseven.ci.input-sha256=${{ steps.docker_inputs.outputs.workspace_fingerprint }}
+          cache-from: |
+            type=gha,scope=workspace-${{ matrix.suite }}-v2
+            type=gha,scope=workspace-${{ matrix.suite }}-v1
+            type=gha,scope=workspace-workspace-core-v1
+            type=gha,scope=workspace-shared-v1
+          cache-to: type=gha,scope=workspace-${{ matrix.suite }}-v2,mode=max,timeout=2m,ignore-error=true
+      - name: Build cached tracking image
+        id: tracking_image
+        if: matrix.suite == 'result-retry' || matrix.suite == 'archive-retry' || matrix.suite == 'tracking'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Global/Dockerfile.tracking
+          load: true
+          tags: sixseven-ci:tracking
+          labels: io.sixseven.ci.input-sha256=${{ steps.docker_inputs.outputs.tracking_fingerprint }}
+          cache-from: |
+            type=gha,scope=tracking-${{ matrix.suite }}-v1
+            type=gha,scope=tracking-recovery-v1
+            type=gha,scope=tracking-shared-v1
+          cache-to: type=gha,scope=tracking-${{ matrix.suite }}-v1,mode=max,timeout=2m,ignore-error=true
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "0.9.26"
@@ -117,14 +193,33 @@ jobs:
       - name: Verify Docker integration
         env:
           RUN_DOCKER_TESTS: "1"
+          POC_DOCKER_PREBUILT: "1"
+          BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}
+          POC_DOCKER_WORKSPACE_IMAGE: ${{ steps.workspace_image.outputs.imageid }}
+          POC_DOCKER_TRACKING_IMAGE: ${{ steps.tracking_image.outputs.imageid }}
           SUITE: ${{ matrix.suite }}
         run: |
           case "$SUITE" in
-            workspace)
-              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py -k 'not test_workspace_worker_retries_saved_runs_when_tracking_returns' -q --durations=5
+            cli)
+              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_cli.py -q --durations=5
               ;;
-            recovery)
+            training)
+              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py::test_workspace_trains_saves_and_compares_results -q --durations=5
+              ;;
+            lifecycle)
+              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py::test_gpu_configuration_is_opt_in_and_cpu_needs_no_nvidia_device Global/tests/test_docker_workflow.py::test_workspace_restart_preserves_results_and_rebuilds_changed_dependencies -q --durations=5
+              ;;
+            notebooks)
+              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py::test_personal_notebook_kernel_runs_packages_and_survives_workspace_restart -q --durations=5
+              ;;
+            member)
+              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py::test_member_environment_reuse_isolation_and_reproduction -q --durations=5
+              ;;
+            result-retry)
               uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py::test_workspace_worker_retries_saved_runs_when_tracking_returns -q --durations=5
+              ;;
+            archive-retry)
+              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py::test_workspace_worker_retries_selected_archive_when_tracking_returns -q --durations=5
               ;;
             tracking)
               uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_tracking_docker.py -q --durations=5
@@ -136,7 +231,7 @@ jobs:
     # A skipped metadata run must not replace the required check on the same SHA.
     name: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base == null && 'metadata-only (no validation)' || 'validate' }}
     if: always() && (github.event_name != 'pull_request' || github.event.action != 'edited' || github.event.changes.base != null)
-    needs: [checks, compatibility, docker]
+    needs: [scope, checks, linux, compatibility, docker]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

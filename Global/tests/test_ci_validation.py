@@ -1,6 +1,5 @@
 """A selective workflow must never accept missing, failed, or malformed checks."""
 
-import itertools
 import json
 import os
 import subprocess
@@ -11,15 +10,35 @@ import pytest
 from scripts import ci_validate
 
 
-def workflow(*, tests=True, smoke=False, native=None, docker=None, tests_mode=None):
+def workflow(
+    *,
+    tests=True,
+    smoke=False,
+    native=None,
+    docker=None,
+    tests_mode=None,
+    test_files=None,
+    native_mode=None,
+    native_tests=None,
+    native_shard_count=None,
+):
     native = [] if native is None else native
     docker = [] if docker is None else docker
+    native_mode = native_mode or ("full" if native else "none")
+    if native_shard_count is None:
+        native_shard_count = {"none": 0, "focused": 1, "full": 4}[native_mode]
     return {
-        "checks": {
+        "checks": {"result": "success"},
+        "linux": {"result": "success" if tests else "skipped"},
+        "scope": {
             "result": "success",
             "outputs": {
                 "tests": json.dumps(tests),
                 "tests_mode": json.dumps(tests_mode or ("full" if tests else "none")),
+                "test_files": json.dumps(test_files or []),
+                "native_mode": json.dumps(native_mode),
+                "native_shard_count": json.dumps(native_shard_count),
+                "native_tests": json.dumps(native_tests or []),
                 "smoke": json.dumps(smoke),
                 "native": json.dumps(native),
                 "docker": json.dumps(docker),
@@ -47,11 +66,7 @@ def test_accepts_documentation_linux_and_full_coverage(needs):
 
 @pytest.mark.parametrize(
     "docker",
-    [
-        list(subset)
-        for size in range(4)
-        for subset in itertools.combinations(["workspace", "recovery", "tracking"], size)
-    ],
+    [[], *[[scenario] for scenario in sorted(ci_validate.DOCKER)], sorted(ci_validate.DOCKER)],
 )
 def test_accepts_each_docker_subset_only_when_its_job_has_the_matching_result(docker):
     needs = workflow(docker=docker)
@@ -61,7 +76,7 @@ def test_accepts_each_docker_subset_only_when_its_job_has_the_matching_result(do
         ci_validate.validate(needs)
 
 
-@pytest.mark.parametrize("job", ["checks", "compatibility", "docker"])
+@pytest.mark.parametrize("job", ["scope", "checks", "linux", "compatibility", "docker"])
 @pytest.mark.parametrize("result", ["failure", "cancelled", "skipped", None, "pending"])
 def test_required_jobs_must_succeed(job, result):
     needs = workflow(native=ci_validate.NATIVE, docker=["tracking"])
@@ -70,7 +85,7 @@ def test_required_jobs_must_succeed(job, result):
         ci_validate.validate(needs)
 
 
-@pytest.mark.parametrize("job", ["compatibility", "docker"])
+@pytest.mark.parametrize("job", ["linux", "compatibility", "docker"])
 @pytest.mark.parametrize("result", ["success", "failure", "cancelled", None])
 def test_unselected_jobs_must_be_skipped(job, result):
     needs = workflow(tests=False)
@@ -79,7 +94,7 @@ def test_unselected_jobs_must_be_skipped(job, result):
         ci_validate.validate(needs)
 
 
-@pytest.mark.parametrize("job", ["checks", "compatibility", "docker"])
+@pytest.mark.parametrize("job", ["scope", "checks", "linux", "compatibility", "docker"])
 def test_missing_job_or_result_is_not_a_success(job):
     needs = workflow()
     del needs[job]["result"]
@@ -90,20 +105,46 @@ def test_missing_job_or_result_is_not_a_success(job):
         ci_validate.validate(needs)
 
 
-@pytest.mark.parametrize("name", ["tests", "tests_mode", "smoke", "native", "docker"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "tests",
+        "tests_mode",
+        "test_files",
+        "native_mode",
+        "native_shard_count",
+        "native_tests",
+        "smoke",
+        "native",
+        "docker",
+    ],
+)
 @pytest.mark.parametrize("value", [None, True, False, [], {}, "", "not JSON"])
 def test_outputs_must_be_json_strings(name, value):
     needs = workflow()
-    needs["checks"]["outputs"][name] = value
-    with pytest.raises(ValueError, match=f"checks.outputs.{name}"):
+    needs["scope"]["outputs"][name] = value
+    with pytest.raises(ValueError, match=f"scope.outputs.{name}"):
         ci_validate.validate(needs)
 
 
-@pytest.mark.parametrize("name", ["tests", "tests_mode", "smoke", "native", "docker"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "tests",
+        "tests_mode",
+        "test_files",
+        "native_mode",
+        "native_shard_count",
+        "native_tests",
+        "smoke",
+        "native",
+        "docker",
+    ],
+)
 def test_every_scope_output_is_required_even_when_all_extra_jobs_are_skipped(name):
     needs = workflow(tests=False)
-    del needs["checks"]["outputs"][name]
-    with pytest.raises(ValueError, match=f"checks.outputs.{name}"):
+    del needs["scope"]["outputs"][name]
+    with pytest.raises(ValueError, match=f"scope.outputs.{name}"):
         ci_validate.validate(needs)
 
 
@@ -111,7 +152,7 @@ def test_every_scope_output_is_required_even_when_all_extra_jobs_are_skipped(nam
 @pytest.mark.parametrize("value", [0, 1, "false", "true", None, [], {}])
 def test_boolean_outputs_cannot_be_truthy_strings_or_numbers(name, value):
     needs = workflow()
-    needs["checks"]["outputs"][name] = json.dumps(value)
+    needs["scope"]["outputs"][name] = json.dumps(value)
     with pytest.raises(ValueError, match="JSON booleans"):
         ci_validate.validate(needs)
 
@@ -133,7 +174,7 @@ def test_boolean_outputs_cannot_be_truthy_strings_or_numbers(name, value):
 )
 def test_native_output_must_be_the_complete_known_matrix_or_empty(value):
     needs = workflow()
-    needs["checks"]["outputs"]["native"] = json.dumps(value)
+    needs["scope"]["outputs"]["native"] = json.dumps(value)
     with pytest.raises(ValueError, match="full native matrix"):
         ci_validate.validate(needs)
 
@@ -144,13 +185,13 @@ def test_native_output_must_be_the_complete_known_matrix_or_empty(value):
 )
 def test_docker_output_rejects_unknown_duplicate_and_nonstring_entries(value):
     needs = workflow()
-    needs["checks"]["outputs"]["docker"] = json.dumps(value)
+    needs["scope"]["outputs"]["docker"] = json.dumps(value)
     with pytest.raises(ValueError, match="unique known Docker checks"):
         ci_validate.validate(needs)
 
 
 @pytest.mark.parametrize(
-    "scope", [{"smoke": True}, {"native": ci_validate.NATIVE}, {"docker": ["workspace"]}]
+    "scope", [{"smoke": True}, {"native": ci_validate.NATIVE}, {"docker": ["training"]}]
 )
 def test_extended_checks_cannot_bypass_linux_tests(scope):
     with pytest.raises(ValueError, match="require Linux tests"):
@@ -159,18 +200,18 @@ def test_extended_checks_cannot_bypass_linux_tests(scope):
 
 @pytest.mark.parametrize("needs", [None, [], "success", {}, {"unexpected": {}}])
 def test_needs_shape_is_required(needs):
-    with pytest.raises(ValueError, match="exactly checks"):
+    with pytest.raises(ValueError, match="exactly scope"):
         ci_validate.validate(needs)
 
 
 def test_new_dependency_cannot_be_silently_ignored():
     needs = workflow()
     needs["another_job"] = {"result": "failure"}
-    with pytest.raises(ValueError, match="exactly checks"):
+    with pytest.raises(ValueError, match="exactly scope"):
         ci_validate.validate(needs)
 
 
-@pytest.mark.parametrize("job", ["checks", "compatibility", "docker"])
+@pytest.mark.parametrize("job", ["scope", "checks", "linux", "compatibility", "docker"])
 def test_job_shape_must_be_an_object(job):
     needs = workflow()
     needs[job] = "success"
@@ -181,8 +222,8 @@ def test_job_shape_must_be_an_object(job):
 @pytest.mark.parametrize("outputs", [None, "", [], True])
 def test_outputs_shape_is_required(outputs):
     needs = workflow()
-    needs["checks"]["outputs"] = outputs
-    with pytest.raises(ValueError, match="checks.outputs is missing or invalid"):
+    needs["scope"]["outputs"] = outputs
+    with pytest.raises(ValueError, match="scope.outputs is missing or invalid"):
         ci_validate.validate(needs)
 
 
@@ -227,14 +268,114 @@ def test_command_rejects_failed_required_job_without_printing_untrusted_payload(
 @pytest.mark.parametrize("value", [None, True, False, 1, [], {}, "unknown", "none"])
 def test_test_mode_cannot_reduce_or_disagree_with_selected_tests(value):
     needs = workflow()
-    needs["checks"]["outputs"]["tests_mode"] = json.dumps(value)
+    needs["scope"]["outputs"]["tests_mode"] = json.dumps(value)
     with pytest.raises(ValueError, match="tests_mode"):
         ci_validate.validate(needs)
 
 
 @pytest.mark.parametrize(
-    "extra", [{"smoke": True}, {"docker": ["workspace"]}, {"native": ci_validate.NATIVE}]
+    "extra", [{"smoke": True}, {"docker": ["training"]}, {"native": ci_validate.NATIVE}]
 )
 def test_personal_mode_cannot_replace_full_tests_for_integrations(extra):
     with pytest.raises(ValueError, match="full regression"):
         ci_validate.validate(workflow(tests_mode="personal", **extra))
+
+
+def test_focused_linux_and_native_require_explicit_test_files():
+    needs = workflow(
+        tests_mode="focused",
+        test_files=["Global/tests/test_personal_env.py"],
+        native=ci_validate.NATIVE,
+        native_mode="focused",
+        native_tests=["Global/tests/test_personal_env.py"],
+    )
+    ci_validate.validate(needs)
+    needs["linux"]["result"] = "skipped"
+    with pytest.raises(ValueError, match="linux must report success"):
+        ci_validate.validate(needs)
+
+
+def test_cli_only_docker_job_is_required_for_focused_commands():
+    needs = workflow(
+        tests_mode="focused",
+        test_files=["Global/tests/test_cli_registration.py"],
+        docker=["cli"],
+    )
+    ci_validate.validate(needs)
+    for result in ("failure", "cancelled", "skipped"):
+        needs["docker"]["result"] = result
+        with pytest.raises(ValueError, match="docker must report success"):
+            ci_validate.validate(needs)
+
+
+@pytest.mark.parametrize(
+    "field, mode", [("test_files", "tests_mode"), ("native_tests", "native_mode")]
+)
+@pytest.mark.parametrize(
+    "files",
+    [
+        [],
+        ["--ignore=Global/tests"],
+        ["Global/tests/../secret.py"],
+        ["Global/tests/test_x.py", "Global/tests/test_x.py"],
+        None,
+    ],
+)
+def test_focused_file_list_cannot_be_empty_or_arbitrary(field, mode, files):
+    needs = workflow(native=ci_validate.NATIVE)
+    needs["scope"]["outputs"][mode] = json.dumps("focused")
+    needs["scope"]["outputs"][field] = json.dumps(files)
+    with pytest.raises(ValueError, match=field):
+        ci_validate.validate(needs)
+
+
+def test_nonfocused_modes_cannot_smuggle_test_filters():
+    needs = workflow()
+    needs["scope"]["outputs"]["test_files"] = json.dumps(["Global/tests/test_data_contract.py"])
+    with pytest.raises(ValueError, match="test_files"):
+        ci_validate.validate(needs)
+
+
+def test_no_platform_jobs_requires_none_mode():
+    needs = workflow(native_mode="full")
+    with pytest.raises(ValueError, match="native_mode must match"):
+        ci_validate.validate(needs)
+
+
+@pytest.mark.parametrize("count", [1, 2])
+def test_focused_native_shards_require_complete_success(count):
+    needs = workflow(
+        native=ci_validate.NATIVE,
+        native_mode="focused",
+        native_tests=["Global/tests/test_personal_env.py"],
+        native_shard_count=count,
+    )
+    ci_validate.validate(needs)
+    for status in ("failure", "cancelled", "skipped", None):
+        needs["compatibility"]["result"] = status
+        with pytest.raises(ValueError, match="compatibility must report success"):
+            ci_validate.validate(needs)
+
+
+@pytest.mark.parametrize(
+    ("mode", "count"),
+    [
+        ("none", 1),
+        ("full", 1),
+        ("full", 2),
+        ("full", 0),
+        ("focused", 0),
+        ("focused", 4),
+        ("focused", True),
+        ("focused", "2"),
+    ],
+)
+def test_native_shard_count_cannot_reduce_full_checks_or_disagree_with_scope(mode, count):
+    needs = workflow(
+        native=ci_validate.NATIVE if mode != "none" else [],
+        native_mode=mode,
+        native_tests=["Global/tests/test_personal_env.py"] if mode == "focused" else [],
+        native_shard_count=count,
+    )
+    with pytest.raises(ValueError, match="native_shard_count"):
+        ci_validate.validate(needs)
