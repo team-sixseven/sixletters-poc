@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @pytest.fixture
 def jobs():
-    return yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+    return yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))["jobs"]
 
 
 @pytest.mark.parametrize("job, mode", [("linux", "tests_mode"), ("compatibility", "native_mode")])
@@ -58,7 +58,7 @@ def test_docker_matrix_runs_each_independent_phase_once(jobs):
     assert set(re.findall(r"^\s+([a-z]+/[a-z]+)\)", command["run"], re.M)) == {
         f"{suite}/{phase}" for suite, phase in pairs
     }
-    source = ast.parse((ROOT / "Global/tests/test_docker_workflow.py").read_text())
+    source = ast.parse((ROOT / "Global/tests/test_docker_workflow.py").read_text(encoding="utf-8"))
     tests = {
         node.name
         for node in source.body
