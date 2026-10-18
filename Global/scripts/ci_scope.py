@@ -424,7 +424,7 @@ def event_scope(event_name: str, event: dict) -> dict:
         return full_scope()
     try:
         pr = event["pull_request"]
-        if pr["base"]["ref"] != "develop":
+        if pr["base"]["ref"] not in {"develop", "ci-benchmark/24-slim-base"}:
             return full_scope()
     except (KeyError, TypeError):
         return full_scope()

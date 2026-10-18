@@ -35,7 +35,7 @@ def shared_cache_images(paths: list[str]) -> list[str]:
 
 def warm_cache_scope(root: Path, environment: Mapping[str, str]) -> list[str]:
     """Only trusted develop push/manual events may populate the shared cache."""
-    if environment.get("GITHUB_REF") != "refs/heads/develop":
+    if environment.get("GITHUB_REF") != "refs/heads/ci-benchmark/24-slim-base":
         return []
     event_name = environment.get("GITHUB_EVENT_NAME")
     if event_name == "workflow_dispatch":

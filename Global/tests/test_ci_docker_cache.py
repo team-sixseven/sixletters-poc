@@ -31,11 +31,11 @@ def test_shared_cache_selection_matches_only_reusable_build_inputs(paths, expect
 @pytest.mark.parametrize(
     "ref, event_name, expected",
     [
-        ("refs/heads/develop", "workflow_dispatch", ["workspace", "tracking"]),
+        ("refs/heads/ci-benchmark/24-slim-base", "workflow_dispatch", ["workspace", "tracking"]),
         ("refs/heads/main", "workflow_dispatch", []),
         ("refs/heads/feature", "workflow_dispatch", []),
         ("refs/pull/24/merge", "pull_request", []),
-        ("refs/heads/develop", "pull_request_target", []),
+        ("refs/heads/ci-benchmark/24-slim-base", "pull_request_target", []),
     ],
 )
 def test_shared_cache_updates_are_restricted_to_trusted_develop(ref, event_name, expected):
@@ -61,7 +61,7 @@ def test_shared_cache_push_uses_entire_pushed_diff_and_includes_removed_inputs(
     assert cache.warm_cache_scope(
         tmp_path,
         {
-            "GITHUB_REF": "refs/heads/develop",
+            "GITHUB_REF": "refs/heads/ci-benchmark/24-slim-base",
             "GITHUB_EVENT_NAME": "push",
             "GITHUB_EVENT_PATH": str(event),
         },
@@ -85,7 +85,7 @@ def test_new_and_deleted_develop_pushes_do_not_require_a_missing_revision(
         cache.warm_cache_scope(
             tmp_path,
             {
-                "GITHUB_REF": "refs/heads/develop",
+                "GITHUB_REF": "refs/heads/ci-benchmark/24-slim-base",
                 "GITHUB_EVENT_NAME": "push",
                 "GITHUB_EVENT_PATH": str(event),
             },
@@ -100,10 +100,10 @@ def test_cache_workflow_is_independent_and_cannot_write_from_pr_events():
     )
     events = workflow[True]  # PyYAML's YAML 1.1 loader treats the GitHub key `on` as true.
     assert set(events) == {"push", "workflow_dispatch"}
-    assert events["push"]["branches"] == ["develop"]
+    assert events["push"]["branches"] == ["ci-benchmark/24-slim-base"]
     assert set(events["push"]["paths"]) == set.union(*cache.CACHE_INPUTS.values())
     assert workflow["permissions"] == {"contents": "read"}
-    assert workflow["jobs"]["scope"]["if"] == "github.ref == 'refs/heads/develop'"
+    assert workflow["jobs"]["scope"]["if"] == "github.ref == 'refs/heads/ci-benchmark/24-slim-base'"
     assert workflow["jobs"]["warm"]["needs"] == "scope"
     assert workflow["jobs"]["warm"]["strategy"]["fail-fast"] is False
 

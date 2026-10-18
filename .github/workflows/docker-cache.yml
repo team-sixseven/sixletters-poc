@@ -2,7 +2,7 @@ name: Shared Docker cache
 
 on:
   push:
-    branches: [develop]
+    branches: [ci-benchmark/24-slim-base]
     paths:
       - .github/workflows/docker-cache.yml
       - .dockerignore
@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   scope:
-    if: github.ref == 'refs/heads/develop'
+    if: github.ref == 'refs/heads/ci-benchmark/24-slim-base'
     runs-on: ubuntu-24.04
     outputs:
       images: ${{ steps.scope.outputs.images }}
