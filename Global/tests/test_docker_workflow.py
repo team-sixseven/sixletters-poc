@@ -338,8 +338,6 @@ def test_workspace_trains_saves_and_compares_results(docker_workspace):
 @contextmanager
 def connected_tracking_workspace(docker_workspace, server, *, purpose):
     workspace, run, _ = docker_workspace
-    server["environment"]["MLFLOW_SERVER_ALLOWED_HOSTS"] += ",tracking:5000"
-    server["run"]("up", "-d", "--wait")
     suffix = uuid.uuid4().hex[:8]
     username, password = f"retry-member-{suffix}", secrets.token_urlsafe(24)
     server["request"]("/api/2.0/mlflow/users/create", {"username": username, "password": password})
@@ -558,67 +556,69 @@ def test_workspace_worker_retries_selected_archive_when_tracking_returns(
                         assert uploaded == expected
 
 
-@pytest.mark.parametrize("personal_packages", [False, True])
-def test_personal_notebook_kernel_runs_packages_and_survives_workspace_restart(
-    docker_workspace, personal_packages
-):
+def test_personal_notebook_kernel_runs_packages_and_survives_workspace_restart(docker_workspace):
     workspace, run, notebook_port = docker_workspace
     run("docker", "compose", "up", "--build", "-d", "--wait", timeout=900)
-    owner = "개인 패키지 팀원" if personal_packages else "공통 패키지 팀원"
     experiment = "notebook001"
-    expected_prefix = f"/workspace/Members/{owner}/.venv" if personal_packages else "/opt/venv"
-    run("./dev", "new", experiment, "--owner", owner)
-    if personal_packages:
-        run("./dev", "env", "add", experiment, "--owner", owner, "tabulate==0.9.0", timeout=300)
-    run("./dev", "env", "kernel", experiment, "--owner", owner, timeout=300)
-    display = f"SixSeven · {owner} / {experiment}"
-    kernel_code = (
-        "import sys, os\n"
-        "from pathlib import Path\n"
-        "import sixletters, sklearn\n"
-        f"assert str(Path(sys.prefix)) == {expected_prefix!r}\n"
-        'assert Path.cwd() == Path("/workspace")\n'
-        'assert not os.environ.get("SIXLETTERS_EXECUTION_JSON")\n'
-    )
-    if personal_packages:
-        kernel_code += (
-            'import tabulate; assert tabulate.__version__ == "0.9.0"\n'
-            'assert Path(sklearn.__file__).is_relative_to("/opt/venv")\n'
-            "assert Path(tabulate.__file__).is_relative_to(sys.prefix)\n"
+    probes = []
+    # Two members share the running Jupyter service, but retain independent environments.
+    for personal_packages in (False, True):
+        owner = "개인 패키지 팀원" if personal_packages else "공통 패키지 팀원"
+        expected_prefix = f"/workspace/Members/{owner}/.venv" if personal_packages else "/opt/venv"
+        run("./dev", "new", experiment, "--owner", owner)
+        if personal_packages:
+            run("./dev", "env", "add", experiment, "--owner", owner, "tabulate==0.9.0", timeout=300)
+        run("./dev", "env", "kernel", experiment, "--owner", owner, timeout=300)
+        display = f"SixSeven · {owner} / {experiment}"
+        kernel_code = (
+            "import sys, os\n"
+            "from pathlib import Path\n"
+            "import sixletters, sklearn\n"
+            f"assert str(Path(sys.prefix)) == {expected_prefix!r}\n"
+            'assert Path.cwd() == Path("/workspace")\n'
+            'assert not os.environ.get("SIXLETTERS_EXECUTION_JSON")\n'
         )
-    probe = workspace / "Global/artifacts/notebook-kernel-check.py"
-    probe.parent.mkdir(parents=True, exist_ok=True)
-    probe.write_text(
-        "import json, os, sys\n"
-        "from pathlib import Path\n"
-        "from jupyter_client import KernelManager\n"
-        "from jupyter_client.kernelspec import KernelSpecManager\n"
-        "from sixletters.personal_env import jupyter_data_path, env_add\n"
-        "root = Path('/workspace')\n"
-        f"experiment = root / 'Members' / {owner!r} / 'experiments' / {experiment!r}\n"
-        "specs = KernelSpecManager(kernel_dirs=[str(jupyter_data_path(root) / 'kernels')])\n"
-        f"name = next(name for name, spec in specs.get_all_specs().items() if spec['spec']['display_name'] == {display!r})\n"
-        "manager = KernelManager(kernel_name=name, kernel_spec_manager=specs)\n"
-        "manager.start_kernel(cwd=str(root))\n"
-        "client = manager.blocking_client()\n"
-        "client.start_channels()\n"
-        "try:\n"
-        "    client.wait_for_ready(timeout=60)\n"
-        f"    code = {kernel_code!r}\n"
-        "    reply = client.execute_interactive(code, timeout=60)\n"
-        "    assert reply['content']['status'] == 'ok', reply['content']\n"
-        "    try:\n"
-        "        env_add(experiment, ['tabulate==0.8.10'])\n"
-        "    except ValueError as error:\n"
-        "        assert 'kernel' in str(error).lower()\n"
-        "    else:\n"
-        "        raise AssertionError('An open notebook must protect its environment')\n"
-        "finally:\n"
-        "    client.stop_channels()\n"
-        "    manager.shutdown_kernel(now=True)\n"
-        "print('Personal notebook kernel verified')\n",
-        encoding="utf-8",
-    )
+        if personal_packages:
+            kernel_code += (
+                'import tabulate; assert tabulate.__version__ == "0.9.0"\n'
+                'assert Path(sklearn.__file__).is_relative_to("/opt/venv")\n'
+                "assert Path(tabulate.__file__).is_relative_to(sys.prefix)\n"
+            )
+        kind = "overlay" if personal_packages else "common"
+        probe = workspace / f"Global/artifacts/notebook-kernel-{kind}-check.py"
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        probe.write_text(
+            "import json, os, sys\n"
+            "from pathlib import Path\n"
+            "from jupyter_client import KernelManager\n"
+            "from jupyter_client.kernelspec import KernelSpecManager\n"
+            "from sixletters.personal_env import jupyter_data_path, env_add\n"
+            "root = Path('/workspace')\n"
+            f"experiment = root / 'Members' / {owner!r} / 'experiments' / {experiment!r}\n"
+            "specs = KernelSpecManager(kernel_dirs=[str(jupyter_data_path(root) / 'kernels')])\n"
+            f"name = next(name for name, spec in specs.get_all_specs().items() if spec['spec']['display_name'] == {display!r})\n"
+            "manager = KernelManager(kernel_name=name, kernel_spec_manager=specs)\n"
+            "manager.start_kernel(cwd=str(root))\n"
+            "client = manager.blocking_client()\n"
+            "client.start_channels()\n"
+            "try:\n"
+            "    client.wait_for_ready(timeout=60)\n"
+            f"    code = {kernel_code!r}\n"
+            "    reply = client.execute_interactive(code, timeout=60)\n"
+            "    assert reply['content']['status'] == 'ok', reply['content']\n"
+            "    try:\n"
+            "        env_add(experiment, ['tabulate==0.8.10'])\n"
+            "    except ValueError as error:\n"
+            "        assert 'kernel' in str(error).lower()\n"
+            "    else:\n"
+            "        raise AssertionError('An open notebook must protect its environment')\n"
+            "finally:\n"
+            "    client.stop_channels()\n"
+            "    manager.shutdown_kernel(now=True)\n"
+            "print('Personal notebook kernel verified')\n",
+            encoding="utf-8",
+        )
+        probes.append((owner, display, probe.relative_to(workspace).as_posix()))
     for restart in (False, True):
         if restart:
             run("docker", "compose", "down")
@@ -632,12 +632,13 @@ def test_personal_notebook_kernel_runs_packages_and_survives_workspace_restart(
         )
         with urlopen(request, timeout=15) as response:
             specs = json.load(response)["kernelspecs"]
-        assert display in {item["spec"]["display_name"] for item in specs.values()}
-        assert "Personal notebook kernel verified" in run(
-            "./dev", "shell", "-c", "python Global/artifacts/notebook-kernel-check.py", timeout=120
-        )
-    if personal_packages:
-        run("./dev", "env", "remove", experiment, "--owner", owner, "tabulate", timeout=300)
+        displays = {item["spec"]["display_name"] for item in specs.values()}
+        for _, display, probe_path in probes:
+            assert display in displays
+            assert "Personal notebook kernel verified" in run(
+                "./dev", "shell", "-c", f"python {shlex.quote(probe_path)}", timeout=120
+            )
+    run("./dev", "env", "remove", experiment, "--owner", probes[1][0], "tabulate", timeout=300)
 
 
 def test_member_environment_reuse_isolation_and_reproduction(docker_workspace):

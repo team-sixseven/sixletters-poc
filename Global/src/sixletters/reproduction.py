@@ -352,14 +352,12 @@ def fetch_archive(cache_root: Path, remote_run_id: str) -> Path:
                 temporary = Path(temporary)
                 downloads = temporary / "downloads"
                 downloads.mkdir()
-                manifest_path = Path(
-                    client.download_artifacts(
-                        remote_run_id,
-                        f"{tracking.ARCHIVE_FOLDER}/{tracking.MANIFEST}",
-                        str(downloads),
-                    )
+                manifest_path = tracking._download_artifact(
+                    remote,
+                    f"{tracking.ARCHIVE_FOLDER}/{tracking.MANIFEST}",
+                    downloads,
+                    uri,
                 )
-                tracking._safe_file(manifest_path, downloads)
                 manifest = _archive_manifest(manifest_path, remote)
                 local_id = manifest["local_run_id"]
                 if not isinstance(local_id, str) or not _UUID.fullmatch(local_id):
@@ -373,12 +371,9 @@ def fetch_archive(cache_root: Path, remote_run_id: str) -> Path:
                     *(key for key in manifest["files"] if key != "result.json"),
                 ]
                 for filename in ordered:
-                    downloaded = Path(
-                        client.download_artifacts(
-                            remote_run_id, f"{tracking.ARCHIVE_FOLDER}/{filename}", str(downloads)
-                        )
+                    downloaded = tracking._download_artifact(
+                        remote, f"{tracking.ARCHIVE_FOLDER}/{filename}", downloads, uri
                     )
-                    tracking._safe_file(downloaded, downloads)
                     expected = manifest["files"][filename]
                     if {
                         "sha256": file_hash(downloaded),
