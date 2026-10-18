@@ -204,6 +204,47 @@ def test_focused_test_command_only_accepts_explicit_repository_files():
         verification.test_command("full", files)
 
 
+def test_full_tests_can_be_sharded_without_changing_unsharded_defaults():
+    command = verification.test_command(
+        "full", shard_index=2, shard_count=4, shard_report="report.json"
+    )
+    assert command[:6] == verification.test_command("full")
+    assert "Global.scripts.ci_shards" in command
+    assert command[command.index("--ci-shard-index") + 1] == "2"
+    assert command[command.index("--ci-shard-count") + 1] == "4"
+    assert command[-2:] == ["--ci-shard-report", "report.json"]
+    assert "--durations=10" in command
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"shard_index": 0},
+        {"shard_count": 4},
+        {"shard_report": "report.json"},
+        {"shard_index": 4, "shard_count": 4},
+        {"shard_index": -1, "shard_count": 4},
+        {"shard_index": 0, "shard_count": 1},
+        {"shard_index": False, "shard_count": 4},
+    ],
+)
+def test_invalid_or_partial_shard_options_fail_closed(options):
+    with pytest.raises(ValueError, match="shard index"):
+        verification.test_command("full", **options)
+
+
+@pytest.mark.parametrize("mode", ["none", "personal", "focused"])
+def test_only_full_tests_may_be_sharded(mode):
+    files = ["Global/tests/test_verification.py"] if mode == "focused" else None
+    with pytest.raises(ValueError, match="Only full tests"):
+        verification.test_command(mode, files, shard_index=0, shard_count=4)
+
+
+def test_shard_report_must_not_be_empty():
+    with pytest.raises(ValueError, match="report path"):
+        verification.test_command("full", shard_index=0, shard_count=4, shard_report=" ")
+
+
 def test_focused_runner_rejects_missing_or_outside_files(tmp_path, monkeypatch):
     path = "Global/tests/test_selected.py"
     with pytest.raises(ValueError, match="검사 파일"):

@@ -69,6 +69,10 @@ jobs:
   linux:
     needs: scope
     if: needs.scope.outputs.tests == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.scope.outputs.tests_mode == '"full"' && '[0,1,2,3]' || '[0]') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,9 +85,15 @@ jobs:
         env:
           TESTS_MODE: ${{ fromJSON(needs.scope.outputs.tests_mode) }}
           TEST_FILES: ${{ needs.scope.outputs.test_files }}
-        run: uv run --project Global --locked --no-sync python Global/scripts/verify_changes.py --tests-only "$TESTS_MODE" --test-files "$TEST_FILES"
+          SHARD_INDEX: ${{ matrix.shard }}
+        run: |
+          if [[ "$TESTS_MODE" == full ]]; then
+            uv run --project Global --locked --no-sync python Global/scripts/verify_changes.py --tests-only full --shard-index "$SHARD_INDEX" --shard-count 4
+          else
+            uv run --project Global --locked --no-sync python Global/scripts/verify_changes.py --tests-only "$TESTS_MODE" --test-files "$TEST_FILES"
+          fi
       - name: Check environment and notebook
-        if: needs.scope.outputs.smoke == 'true'
+        if: needs.scope.outputs.smoke == 'true' && matrix.shard == 0
         run: |
           uv run --project Global --locked --no-sync python Global/scripts/smoke_check.py --ecg
           uv run --project Global --locked --no-sync jupyter nbconvert --to notebook --execute Global/notebooks/00_environment_check.ipynb --output-dir Global/artifacts/notebook-check
@@ -95,6 +105,7 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ fromJSON(needs.scope.outputs.native || '[]') }}
+        shard: ${{ fromJSON(needs.scope.outputs.native_mode == '"full"' && '[0,1,2,3]' || '[0]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -107,10 +118,16 @@ jobs:
         env:
           TESTS_MODE: ${{ fromJSON(needs.scope.outputs.native_mode) }}
           TEST_FILES: ${{ needs.scope.outputs.native_tests }}
-        run: uv run --project Global --locked --no-sync python Global/scripts/verify_changes.py --tests-only "$TESTS_MODE" --test-files "$TEST_FILES"
+          SHARD_INDEX: ${{ matrix.shard }}
+        run: |
+          if [[ "$TESTS_MODE" == full ]]; then
+            uv run --project Global --locked --no-sync python Global/scripts/verify_changes.py --tests-only full --shard-index "$SHARD_INDEX" --shard-count 4
+          else
+            uv run --project Global --locked --no-sync python Global/scripts/verify_changes.py --tests-only "$TESTS_MODE" --test-files "$TEST_FILES"
+          fi
         shell: bash
       - name: Check full environment and notebook
-        if: needs.scope.outputs.native_mode == '"full"'
+        if: needs.scope.outputs.native_mode == '"full"' && matrix.shard == 0
         shell: bash
         run: |
           uv run --project Global --locked --no-sync python Global/scripts/smoke_check.py --ecg
@@ -125,7 +142,15 @@ jobs:
       fail-fast: false
       matrix:
         suite: ${{ fromJSON(needs.scope.outputs.docker || '[]') }}
-    name: docker (${{ matrix.suite }})
+        phase: [core, notebooks, member]
+        exclude:
+          - {suite: cli, phase: notebooks}
+          - {suite: cli, phase: member}
+          - {suite: recovery, phase: notebooks}
+          - {suite: recovery, phase: member}
+          - {suite: tracking, phase: notebooks}
+          - {suite: tracking, phase: member}
+    name: docker (${{ matrix.suite }}, ${{ matrix.phase }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-compose-action@54042514f505b273907334ae2b9cdbb9a0213c1a # v2.4.0
@@ -147,11 +172,13 @@ jobs:
           load: true
           tags: sixseven-ci:cpu
           labels: io.sixseven.ci.input-sha256=${{ steps.docker_inputs.outputs.workspace_fingerprint }}
-          cache-from: type=gha,scope=workspace-${{ matrix.suite }}-v1
-          cache-to: type=gha,scope=workspace-${{ matrix.suite }}-v1,mode=max,timeout=2m,ignore-error=true
+          cache-from: |
+            type=gha,scope=workspace-${{ matrix.suite }}-${{ matrix.phase }}-v1
+            type=gha,scope=workspace-${{ matrix.suite }}-v1
+          cache-to: type=gha,scope=workspace-${{ matrix.suite }}-${{ matrix.phase }}-v1,mode=max,timeout=2m,ignore-error=true
       - name: Build cached tracking image
         id: tracking_image
-        if: matrix.suite != 'workspace'
+        if: matrix.suite == 'recovery' || matrix.suite == 'tracking'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -174,15 +201,25 @@ jobs:
           POC_DOCKER_WORKSPACE_IMAGE: ${{ steps.workspace_image.outputs.imageid }}
           POC_DOCKER_TRACKING_IMAGE: ${{ steps.tracking_image.outputs.imageid }}
           SUITE: ${{ matrix.suite }}
+          PHASE: ${{ matrix.phase }}
         run: |
-          case "$SUITE" in
-            workspace)
-              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py -k 'not test_workspace_worker_retries_saved_runs_when_tracking_returns' -q --durations=5
+          case "$SUITE/$PHASE" in
+            cli/core)
+              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_cli.py -q --durations=5
               ;;
-            recovery)
+            workspace/core)
+              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py::test_gpu_configuration_is_opt_in_and_cpu_needs_no_nvidia_device Global/tests/test_docker_workflow.py::test_compose_up_starts_workspace_trains_and_preserves_results -q --durations=5
+              ;;
+            workspace/notebooks)
+              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py::test_personal_notebook_kernel_runs_packages_and_survives_workspace_restart -q --durations=5
+              ;;
+            workspace/member)
+              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py::test_member_environment_reuse_isolation_and_reproduction -q --durations=5
+              ;;
+            recovery/core)
               uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py::test_workspace_worker_retries_saved_runs_when_tracking_returns -q --durations=5
               ;;
-            tracking)
+            tracking/core)
               uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_tracking_docker.py -q --durations=5
               ;;
             *) echo 'Unknown Docker suite'; exit 1 ;;

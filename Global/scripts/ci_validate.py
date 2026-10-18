@@ -6,7 +6,7 @@ import re
 import sys
 
 NATIVE = ["windows-2025", "macos-26"]
-DOCKER = {"workspace", "recovery", "tracking"}
+DOCKER = {"cli", "workspace", "recovery", "tracking"}
 JOBS = {"scope", "checks", "linux", "compatibility", "docker"}
 
 

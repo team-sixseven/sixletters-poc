@@ -10,6 +10,9 @@ from pathlib import Path, PurePosixPath
 
 NATIVE = ["windows-2025", "macos-26"]
 DOCKER = ["workspace", "recovery", "tracking"]
+# The workspace suite includes the CLI checks; select the small suite only when
+# no broader workspace scenario is needed.
+DOCKER_SUITES = ["cli", *DOCKER]
 DEPENDENCIES = {
     "Global/pyproject.toml",
     "Global/uv.lock",
@@ -21,7 +24,10 @@ CI_FILES = {
     "Global/scripts/ci_scope.py",
     "Global/scripts/ci_validate.py",
     "Global/scripts/ci_docker_cache.py",
+    "Global/scripts/ci_shards.py",
     "Global/tests/test_ci_docker_cache.py",
+    "Global/tests/test_ci_shards.py",
+    "Global/tests/test_ci_workflow.py",
     "Global/scripts/verify_changes.py",
     "Global/tests/test_ci_scope.py",
     "Global/tests/test_ci_validation.py",
@@ -264,7 +270,7 @@ def select_scope(
         if not all((root / name).is_file() for name in CLI_TESTS):
             return full_scope()
         selected.update(CLI_TESTS)
-        suites.add("workspace")
+        suites.add("cli")
     native_selected = set(native_tests)
     for path in paths:
         native_selected.update(NATIVE_SOURCE_TESTS.get(path, set()))
@@ -301,6 +307,11 @@ def select_scope(
         if path.startswith("Global/tests/"):
             if path == "Global/tests/test_docker_workflow.py":
                 suites.update(("workspace", "recovery"))
+            elif path in {
+                "Global/tests/test_docker_cli.py",
+                "Global/tests/test_cli_registration.py",
+            }:
+                suites.add("cli")
             elif path == "Global/tests/test_tracking_docker.py":
                 suites.update(("recovery", "tracking"))
             elif path == "Global/tests/test_smoke_check.py":
@@ -335,6 +346,8 @@ def select_scope(
     if personal and selected:
         selected.update(PERSONAL_TESTS)
     mode = "full" if tests else "focused" if selected else "personal" if personal else "none"
+    if "workspace" in suites:
+        suites.discard("cli")
     return {
         "tests": mode != "none",
         "tests_mode": mode,
@@ -343,7 +356,7 @@ def select_scope(
         "native": NATIVE.copy() if native_tests else [],
         "native_mode": "focused" if native_tests else "none",
         "native_tests": native_tests,
-        "docker": [suite for suite in DOCKER if suite in suites],
+        "docker": [suite for suite in DOCKER_SUITES if suite in suites],
     }
 
 

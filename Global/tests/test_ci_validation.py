@@ -293,6 +293,19 @@ def test_focused_linux_and_native_require_explicit_test_files():
         ci_validate.validate(needs)
 
 
+def test_cli_only_docker_job_is_required_for_focused_commands():
+    needs = workflow(
+        tests_mode="focused",
+        test_files=["Global/tests/test_cli_registration.py"],
+        docker=["cli"],
+    )
+    ci_validate.validate(needs)
+    for result in ("failure", "cancelled", "skipped"):
+        needs["docker"]["result"] = result
+        with pytest.raises(ValueError, match="docker must report success"):
+            ci_validate.validate(needs)
+
+
 @pytest.mark.parametrize(
     "field, mode", [("test_files", "tests_mode"), ("native_tests", "native_mode")]
 )

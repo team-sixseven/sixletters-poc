@@ -199,6 +199,18 @@ def assert_new_terminal_uses_project_environment(run, notebook_port):
             pass
 
 
+def assert_installed_project_commands(run):
+    # Read the current project declaration, not a hard-coded command list. This
+    # catches renamed or newly added console scripts in the actual built image.
+    run(
+        "./dev",
+        "shell",
+        "-c",
+        "python -m pytest Global/tests/test_cli_registration.py -q",
+        timeout=90,
+    )
+
+
 def test_compose_up_starts_workspace_trains_and_preserves_results(docker_workspace):
     workspace, run, notebook_port = docker_workspace
     # Existing local files must move safely on the real bind mount before the worker starts.
@@ -226,6 +238,7 @@ def test_compose_up_starts_workspace_trains_and_preserves_results(docker_workspa
     environment = json.loads(environment_check.read_text(encoding="utf-8"))
     assert environment["synthetic_data_and_ecg"] == "passed"
     assert environment["gpu"] == "not requested"
+    assert_installed_project_commands(run)
     assert_new_terminal_uses_project_environment(run, notebook_port)
 
     run("./dev", "demo", "--output", "Global/data/prepared/demo-v1")
@@ -651,7 +664,8 @@ def test_personal_notebook_kernel_runs_packages_and_survives_workspace_restart(
 
 def test_member_environment_reuse_isolation_and_reproduction(docker_workspace):
     workspace, run, _ = docker_workspace
-    run("./dev", "up", "-d", "--wait", timeout=900)
+    run("docker", "compose", "up", "--build", "-d", "--wait", timeout=900)
+    run("./dev", "demo", "--output", "Global/data/prepared/demo-v1")
     owner = "공유 환경 팀원"
     member = workspace / "Members" / owner
     run("./dev", "init", "--owner", owner, "--data", "Global/data/prepared/demo-v1")

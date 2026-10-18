@@ -79,7 +79,14 @@ def changed_files(root: Path, *, base: str | None = None, staged: bool = False) 
     return Changes(tuple(sorted(files)), True, selected)
 
 
-def test_command(mode: str, test_files: list[str] | None = None) -> list[str] | None:
+def test_command(
+    mode: str,
+    test_files: list[str] | None = None,
+    *,
+    shard_index: int | None = None,
+    shard_count: int | None = None,
+    shard_report: str | None = None,
+) -> list[str] | None:
     if mode not in {"none", "personal", "focused", "full"}:
         raise ValueError("Unknown verification test mode")
     files = test_files or []
@@ -96,9 +103,34 @@ def test_command(mode: str, test_files: list[str] | None = None) -> list[str] | 
             raise ValueError("Focused tests must list repository test files")
     elif files:
         raise ValueError("Test files are only accepted for focused verification")
+    sharded = shard_index is not None or shard_count is not None or shard_report is not None
+    if sharded and (
+        mode != "full"
+        or type(shard_index) is not int
+        or type(shard_count) is not int
+        or shard_count < 2
+        or not 0 <= shard_index < shard_count
+    ):
+        raise ValueError("Only full tests accept a valid shard index and count together")
     if mode == "none":
         return None
     command = [sys.executable, "-m", "pytest", "-c", "Global/pyproject.toml", "-q"]
+    if sharded:
+        command.extend(
+            [
+                "-p",
+                "Global.scripts.ci_shards",
+                "--ci-shard-index",
+                str(shard_index),
+                "--ci-shard-count",
+                str(shard_count),
+                "--durations=10",
+            ]
+        )
+        if shard_report is not None:
+            if not isinstance(shard_report, str) or not shard_report.strip():
+                raise ValueError("Shard report path must not be empty")
+            command.extend(["--ci-shard-report", shard_report])
     if mode == "personal":
         command.extend(PERSONAL_TESTS)
     elif mode == "focused":
@@ -106,8 +138,22 @@ def test_command(mode: str, test_files: list[str] | None = None) -> list[str] | 
     return command
 
 
-def run_tests(root: Path, mode: str, test_files: list[str] | None = None) -> int:
-    command = test_command(mode, test_files)
+def run_tests(
+    root: Path,
+    mode: str,
+    test_files: list[str] | None = None,
+    *,
+    shard_index: int | None = None,
+    shard_count: int | None = None,
+    shard_report: str | None = None,
+) -> int:
+    command = test_command(
+        mode,
+        test_files,
+        shard_index=shard_index,
+        shard_count=shard_count,
+        shard_report=shard_report,
+    )
     if mode == "focused":
         for name in test_files or []:
             file = root / name
@@ -184,11 +230,25 @@ def main() -> int:
         "--tests-only", choices=("none", "personal", "focused", "full"), help=argparse.SUPPRESS
     )
     parser.add_argument("--test-files", default="[]", help=argparse.SUPPRESS)
+    parser.add_argument("--shard-index", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--shard-count", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--shard-report", help=argparse.SUPPRESS)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     try:
         if args.tests_only:
-            return run_tests(root, args.tests_only, json.loads(args.test_files))
+            return run_tests(
+                root,
+                args.tests_only,
+                json.loads(args.test_files),
+                shard_index=args.shard_index,
+                shard_count=args.shard_count,
+                shard_report=args.shard_report,
+            )
+        if any(
+            value is not None for value in (args.shard_index, args.shard_count, args.shard_report)
+        ):
+            raise ValueError("Shard options require --tests-only full")
         return verify(root, full=args.full, staged=args.staged, base=args.base)
     except (ValueError, OSError) as error:
         print(f"검증 실패: {error}", file=sys.stderr)

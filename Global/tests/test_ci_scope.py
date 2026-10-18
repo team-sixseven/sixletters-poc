@@ -203,6 +203,9 @@ def test_shared_experiment_and_fixture_changes_keep_all_container_consumers(path
         "Global/tests/test_ci_scope.py",
         "Global/scripts/ci_validate.py",
         "Global/tests/test_ci_validation.py",
+        "Global/scripts/ci_shards.py",
+        "Global/tests/test_ci_shards.py",
+        "Global/tests/test_ci_workflow.py",
         "Global/reports/generate.py",
         "Global/docs/build.toml",
         "new-infrastructure/service.toml",
@@ -482,14 +485,14 @@ def test_registration_change_cannot_hide_build_test_or_dependency_changes(extra)
     assert not ci_scope.scripts_only_change(before, "not valid toml")
 
 
-def test_registered_command_change_runs_actual_entrypoint_and_workspace_tests():
+def test_registered_command_change_runs_actual_entrypoint_and_fresh_terminal_tests():
     scope = ci_scope.select_scope(["Global/pyproject.toml"], scripts_only=True)
     assert scope == {
         **DOCS,
         "tests": True,
         "tests_mode": "focused",
         "test_files": sorted(ci_scope.CLI_TESTS),
-        "docker": ["workspace"],
+        "docker": ["cli"],
         "native": ci_scope.NATIVE,
         "native_mode": "focused",
         "native_tests": ["Global/tests/test_cli_registration.py"],
@@ -498,6 +501,44 @@ def test_registered_command_change_runs_actual_entrypoint_and_workspace_tests():
         ci_scope.select_scope(["Global/pyproject.toml", "Global/uv.lock"], scripts_only=True)
         == FULL
     )
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        ([], ["cli"]),
+        (["Global/tests/test_cli_registration.py"], ["cli"]),
+        (["Global/tests/test_docker_cli.py"], ["cli"]),
+        (["Global/tests/test_docker_workflow.py"], ["workspace", "recovery"]),
+        (["compose.yaml"], ["workspace", "recovery"]),
+        (["Global/src/sixletters/tracking.py"], ["cli", "recovery", "tracking"]),
+        (["compose.tracking.yaml"], ["cli", "recovery", "tracking"]),
+        (["Global/src/sixletters/comparison.py"], ["cli", "tracking"]),
+        (["Global/src/sixletters/experiment.py"], ci_scope.DOCKER),
+        (["Global/uv.lock"], ci_scope.DOCKER),
+    ],
+)
+def test_command_registration_keeps_other_changes_required_docker_checks(extra, expected):
+    scope = ci_scope.select_scope(["Global/pyproject.toml", *extra], scripts_only=True)
+    assert scope["docker"] == expected
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["Global/tests/test_docker_cli.py", "Global/tests/test_cli_registration.py"],
+)
+def test_command_test_edits_keep_actual_container_validation(path):
+    scope = ci_scope.select_scope([path])
+    assert scope["tests_mode"] == "focused"
+    assert path in scope["test_files"]
+    assert scope["docker"] == ["cli"]
+
+
+def test_full_workspace_check_covers_cli_without_duplicate_container_startup():
+    scope = ci_scope.select_scope(["Global/tests/test_docker_workflow.py"])
+    assert "Global/tests/test_docker_cli.py" in scope["test_files"]
+    assert scope["docker"] == ["workspace", "recovery"]
+    assert "cli" not in ci_scope.full_scope()["docker"]
 
 
 def test_registration_diff_is_proven_against_pr_merge_base_not_latest_commit(history):
