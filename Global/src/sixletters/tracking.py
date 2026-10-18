@@ -143,6 +143,22 @@ def _write_json(path: Path, value: dict) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
+def _run_lock(state_path: Path) -> FileLock:
+    """Open an established lock file before serializing a result's upload state."""
+    lock_path = state_path.with_suffix(".lock")
+    # On Docker bind mounts, creating and flocking through the same first
+    # descriptor can admit concurrent holders. Exclusive creation followed by
+    # close makes FileLock reopen an established file. Do not replace or unlink
+    # the pathname: another publisher may already hold it.
+    try:
+        descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    except FileExistsError:
+        pass
+    else:
+        os.close(descriptor)
+    return FileLock(str(lock_path), timeout=1)
+
+
 def _group(result: dict) -> str:
     return _hash_json(
         {
@@ -533,7 +549,7 @@ def _publish(
     state_dir = root / ".tracking" / _destination_key(uri, experiment_name)
     state_dir.mkdir(parents=True, exist_ok=True)
     state_path = state_dir / f"{run_dir.name}.json"
-    with FileLock(str(state_path.with_suffix(".lock")), timeout=1):
+    with _run_lock(state_path):
         result, manifest = _local_manifest(run_dir)
         bundle_hash = _hash_json(manifest)
         state = _json(state_path) if state_path.exists() else {}
@@ -779,7 +795,7 @@ def _retry_complete(run_dir: Path, configuration: tuple[str, str]) -> bool:
     )
     if not state_path.is_file():
         return False
-    with FileLock(str(state_path.with_suffix(".lock")), timeout=1):
+    with _run_lock(state_path):
         state = _json(state_path)
         if (
             state.get("schema_version") != 2
