@@ -63,7 +63,7 @@ def tracking_server(tmp_path_factory):
         "MLFLOW_AUTH_ADMIN_USERNAME": admin,
         "MLFLOW_AUTH_ADMIN_PASSWORD": password,
         "MLFLOW_FLASK_SERVER_SECRET_KEY": secrets.token_urlsafe(48),
-        "MLFLOW_SERVER_ALLOWED_HOSTS": "localhost:*,127.0.0.1:*",
+        "MLFLOW_SERVER_ALLOWED_HOSTS": "localhost:*,127.0.0.1:*,tracking:5000",
     }
     for name in ("COMPOSE_PROFILES", "COMPOSE_FILE", "MLFLOW_TRACKING_TOKEN"):
         environment.pop(name, None)
@@ -264,6 +264,10 @@ def test_six_independent_training_processes_sync_and_compare(
         config = init_experiment(owner, "exp001", root=checkout / "Members")
         # Each contributor changes their own model settings; the common split stays fixed.
         config.write_text(config.read_text().replace("C = 1.0", f"C = {(index + 1) / 10}"))
+        if index == 0:
+            config.with_name("전처리 설정.yaml").write_text(
+                "imputation: median\n", encoding="utf-8"
+            )
         workspaces.append(checkout)
 
     def train(index):
@@ -434,6 +438,7 @@ def test_six_independent_training_processes_sync_and_compare(
     monkeypatch.setenv("MLFLOW_TRACKING_PASSWORD", password)
     downloaded = fetch_archive(recipient / "Global/artifacts/.restored", selected.info.run_id)
     original = json.loads((local_runs[0] / "result.json").read_text())
+    assert "전처리 설정.yaml" in original["resources"]
     assert downloaded != local_runs[0]
     assert downloaded.name == original["run_id"]
     for local in local_runs[0].rglob("*"):
@@ -539,8 +544,14 @@ def test_six_independent_training_processes_sync_and_compare(
     assert issues[0]["code"] == "duplicate_remote"
     assert set(issues[0]["remote_run_ids"]) == {selected.info.run_id, duplicate.info.run_id}
     assert owners[0] not in {run["owner"] for run in healthy}
-    paths = fetch_runs(tmp_path / "healthy-reviewer", issues=[])
+    # Refresh remote eligibility while reusing the six already verified bundles.
+    # A cached duplicate must still be excluded before local comparison.
+    paths = fetch_runs(tmp_path / "reviewer" / "artifacts", issues=[])
+    assert set(paths) < set(remote_dirs)
+    assert {path.name for path in paths} == {
+        remote.info.run_id for remote in remote_runs if remote.info.run_id != selected.info.run_id
+    }
     assert len(compare_runs(paths, tmp_path / "healthy-comparison.csv")) == 5
     with pytest.raises(BundleError, match="duplicate"):
-        fetch_runs(tmp_path / "healthy-reviewer", run_ids=[duplicate.info.run_id], issues=[])
+        fetch_runs(tmp_path / "reviewer" / "artifacts", run_ids=[duplicate.info.run_id], issues=[])
     assert len(client.search_runs([experiment.experiment_id])) == 7

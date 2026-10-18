@@ -17,7 +17,7 @@ import warnings
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from filelock import FileLock
 
@@ -298,12 +298,65 @@ def _local_manifest(run_dir: Path) -> tuple[dict, dict]:
         raise BundleError("Local comparison result is incomplete or modified") from error
 
 
-def _legacy_manifest(client, remote, state_dir: Path) -> dict:
-    with tempfile.TemporaryDirectory(dir=state_dir) as temporary:
-        path = Path(
-            client.download_artifacts(remote.info.run_id, f"{REMOTE_FOLDER}/{MANIFEST}", temporary)
+def _download_artifact(remote, relative: str, destination: Path, uri: str) -> Path:
+    """Download one selected file through this tracking server's artifact proxy.
+
+    Search/get-run already supplied the artifact root. Passing it directly to the
+    public artifact API avoids repeating run and registered-model lookups for
+    every file. Never let a server-provided URI redirect credentials to another
+    host or select a local/cloud-storage artifact repository.
+    """
+    artifact_uri = getattr(remote.info, "artifact_uri", None)
+    try:
+        artifact = urlsplit(artifact_uri) if isinstance(artifact_uri, str) else None
+        server = urlsplit(uri)
+        default_port = 443 if server.scheme == "https" else 80
+        valid = (
+            artifact is not None
+            and artifact.scheme == "mlflow-artifacts"
+            and not artifact.query
+            and not artifact.fragment
+            and artifact.username is None
+            and artifact.password is None
+            and not any(character.isspace() or ord(character) < 32 for character in artifact_uri)
+            and not any(character in artifact_uri for character in ("\\", "%"))
+            and (
+                not artifact.netloc
+                or (artifact.hostname, artifact.port or default_port)
+                == (server.hostname, server.port or default_port)
+            )
+            and artifact.path.startswith("/")
+            and artifact.path != "/"
+            and PurePosixPath(artifact.path).as_posix() == artifact.path.rstrip("/")
+            and ".." not in PurePosixPath(artifact.path).parts
         )
-        _safe_file(path, Path(temporary))
+    except ValueError:
+        valid = False
+    path = PurePosixPath(relative)
+    if not valid or (
+        path.is_absolute()
+        or path.as_posix() != relative
+        or not path.parts
+        or any(part in {".", ".."} for part in path.parts)
+        or "\\" in relative
+        or any(ord(character) < 32 for character in relative)
+    ):
+        raise BundleError("Remote artifact location must use the configured server's safe proxy")
+    from mlflow.artifacts import download_artifacts
+
+    # The explicit tracking URI retains MLflow's normal HTTP authentication.
+    # Drop the optional same-server authority so all requests use that URI.
+    selected = f"mlflow-artifacts:{artifact.path.rstrip('/')}/{quote(relative, safe='/')}"
+    downloaded = Path(
+        download_artifacts(artifact_uri=selected, dst_path=str(destination), tracking_uri=uri)
+    )
+    _safe_file(downloaded, destination)
+    return downloaded
+
+
+def _legacy_manifest(remote, state_dir: Path, uri: str) -> dict:
+    with tempfile.TemporaryDirectory(dir=state_dir) as temporary:
+        path = _download_artifact(remote, f"{REMOTE_FOLDER}/{MANIFEST}", Path(temporary), uri)
         return _checked_manifest(path, remote)
 
 
@@ -341,7 +394,7 @@ def _log_summary(client, remote, result: dict, *, validation_summary: dict | Non
         for name, value in parameters.items()
     ):
         raise BundleError("Remote summary differs from the saved result")
-    from mlflow.entities import Metric, Param
+    from mlflow.entities import Metric, Param, RunTag
 
     timestamp = time.time_ns() // 1_000_000
     metrics = [
@@ -352,27 +405,31 @@ def _log_summary(client, remote, result: dict, *, validation_summary: dict | Non
     params = [
         Param(name, value) for name, value in parameters.items() if name not in recorded_parameters
     ]
-    # Querying persisted values also handles a successful log_batch whose HTTP
-    # response was lost, without adding another metric-history point on retry.
-    if metrics or params:
-        client.log_batch(remote.info.run_id, metrics=metrics, params=params, synchronous=True)
-    client.set_tag(
-        remote.info.run_id, PREFIX + "parameters_complete", str(parameters_complete).lower()
-    )
+    tags = {PREFIX + "parameters_complete": str(parameters_complete).lower()}
     if validation_summary is not None:
         # Derived, aggregate display metadata; immutable run files and the
         # original three metric histories remain unchanged on retries.
-        client.set_tag(
-            remote.info.run_id,
-            PREFIX + "validation_summary_v1",
-            json.dumps(validation_summary, sort_keys=True, allow_nan=False),
+        tags[PREFIX + "validation_summary_v1"] = json.dumps(
+            validation_summary, sort_keys=True, allow_nan=False
         )
-        client.set_tag(
+        # Only a bounded endpoint hint is needed by the selection display.
+        # The full definition remains in the immutable result artifact.
+        tags[PREFIX + "target_definition"] = result["comparison_context"]["dataset"][
+            "target_definition"
+        ][:4000]
+    changed_tags = [
+        RunTag(key, value) for key, value in tags.items() if remote.data.tags.get(key) != value
+    ]
+    # Querying persisted values also handles a successful log_batch whose HTTP
+    # response was lost, without adding another metric-history point on retry.
+    # Completion tags stay separate and are written only after file validation.
+    if metrics or params or changed_tags:
+        client.log_batch(
             remote.info.run_id,
-            PREFIX + "target_definition",
-            # Only a bounded endpoint hint is needed by the selection display.
-            # The full definition remains in the immutable result artifact.
-            result["comparison_context"]["dataset"]["target_definition"][:4000],
+            metrics=metrics,
+            params=params,
+            tags=changed_tags,
+            synchronous=True,
         )
 
 
@@ -535,7 +592,7 @@ def _publish(
                     remote.info.status == "FINISHED"
                     and remote.data.tags.get(PREFIX + "complete") == "true"
                 ):
-                    legacy = _legacy_manifest(client, remote, state_dir)
+                    legacy = _legacy_manifest(remote, state_dir, uri)
                     if any(
                         legacy["files"].get(name) != entry
                         for name, entry in manifest["files"].items()
@@ -1142,12 +1199,9 @@ def fetch_runs(
                         staging = Path(temporary) / "verified"
                         staging.mkdir()
                         for name in (MANIFEST, *COMPARISON_FILES):
-                            downloaded = Path(
-                                client.download_artifacts(
-                                    remote_id, f"{REMOTE_FOLDER}/{name}", temporary
-                                )
+                            downloaded = _download_artifact(
+                                remote, f"{REMOTE_FOLDER}/{name}", Path(temporary), uri
                             )
-                            _safe_file(downloaded, Path(temporary))
                             shutil.copyfile(downloaded, staging / name)
                         _check_download(staging, remote)
                         staging.rename(destination)

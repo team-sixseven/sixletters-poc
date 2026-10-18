@@ -344,7 +344,7 @@ def test_remote_compare_cli_fetches_in_selected_order_and_distinguishes_referenc
     monkeypatch.delenv("MLFLOW_EXPERIMENT_NAME", raising=False)
     runs = [completed_run(tmp_path / str(i), owner=f"member{i}") for i in range(2)]
     client = FakeClient(tmp_path / "server")
-    monkeypatch.setattr(tracking, "_client", lambda _: client)
+    client.bind(monkeypatch)
     monkeypatch.setenv("MLFLOW_TRACKING_URI", "http://tracking.example:5000")
     for run in runs:
         assert tracking.auto_publish(run) == "uploaded"

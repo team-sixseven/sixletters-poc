@@ -8,6 +8,7 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
 import pandas as pd
@@ -31,6 +32,8 @@ class FakeClient:
         self.metrics = {}
         self.parameters = {}
         self.batches = []
+        self.batch_tags = []
+        self.tag_calls = []
         self.fail_create_response = False
         self.fail_upload = False
         self.fail_finish_response = False
@@ -40,6 +43,20 @@ class FakeClient:
         self.offline = False
         self.downloads = []
         self.create_count = 0
+
+    def bind(self, monkeypatch):
+        """Route both MLflow API boundaries to this fake server's storage."""
+        from mlflow import artifacts
+
+        monkeypatch.setattr(tracking, "_client", lambda uri: self)
+
+        def download(*, artifact_uri, dst_path, tracking_uri):
+            assert tracking_uri == tracking._configuration()[0]
+            parts = unquote(urlsplit(artifact_uri).path).lstrip("/").split("/")
+            assert parts[2] == "artifacts"
+            return self.download_artifacts(parts[1], "/".join(parts[3:]), dst_path)
+
+        monkeypatch.setattr(artifacts, "download_artifacts", download)
 
     def get_experiment_by_name(self, name):
         if self.offline:
@@ -60,6 +77,7 @@ class FakeClient:
                 status="RUNNING",
                 experiment_id=experiment_id,
                 lifecycle_stage="active",
+                artifact_uri=f"mlflow-artifacts:/{experiment_id}/{identifier}/artifacts",
             ),
             data=SimpleNamespace(tags=dict(tags), metrics={}, params={}),
         )
@@ -84,9 +102,10 @@ class FakeClient:
             found = [run for run in found if run.info.status == "FINISHED"]
         return copy.deepcopy(found)
 
-    def log_batch(self, run_id, *, metrics, params, synchronous):
+    def log_batch(self, run_id, *, metrics, params, tags, synchronous):
         assert synchronous is True
         self.batches.append((run_id, metrics, params))
+        self.batch_tags.append(tags)
         for metric in metrics:
             assert metric.timestamp > 0
             assert metric.step == 0
@@ -98,6 +117,9 @@ class FakeClient:
             )
             assert previous == parameter.value
             self.runs[run_id].data.params[parameter.key] = parameter.value
+        for tag in tags:
+            assert len(tag.value) <= 8000
+            self.runs[run_id].data.tags[tag.key] = tag.value
         if self.fail_batch_response:
             self.fail_batch_response = False
             raise ConnectionError("batch response lost SECRET")
@@ -112,6 +134,7 @@ class FakeClient:
         shutil.copyfile(local_path, destination)
 
     def set_tag(self, run_id, key, value):
+        self.tag_calls.append((key, value))
         self.runs[run_id].data.tags[key] = value
         if (
             self.fail_archive_tag_response
@@ -144,7 +167,7 @@ def setup_tracking(tmp_path, monkeypatch):
     model = tmp_path / "weights.txt"
     model.write_text("opaque model, never deserialize")
     client = FakeClient(tmp_path / "server")
-    monkeypatch.setattr(tracking, "_client", lambda uri: client)
+    client.bind(monkeypatch)
 
     def make_run(owner="팀원가", feature_set="clinical"):
         config = init_experiment(
@@ -258,6 +281,12 @@ def test_worker_publishes_only_comparison_files_after_local_completion(setup_tra
     assert len(client.batches) == 1
     assert client.batches[0][0] == remote.info.run_id
     assert len({metric.timestamp for metric in client.batches[0][1]}) == 1
+    assert {tag.key for tag in client.batch_tags[0]} == {
+        tracking.PREFIX + "parameters_complete",
+        tracking.PREFIX + "validation_summary_v1",
+        tracking.PREFIX + "target_definition",
+    }
+    assert client.tag_calls == [(tracking.PREFIX + "complete", "true")]
     assert tracking.sync_runs(root)["already_synced"] == 1
     assert client.create_count == 1
     assert len(client.batches) == 1
@@ -652,10 +681,17 @@ def test_state_is_scoped_by_server_url(setup_tracking, monkeypatch):
     run = make_run()
     enable()
     assert tracking.auto_publish(run) == "uploaded"
+    first_download = tracking.fetch_runs(root)[0]
     second = FakeClient(root / "other-server")
     monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://second.example")
-    monkeypatch.setattr(tracking, "_client", lambda uri: second)
+    second.bind(monkeypatch)
     assert tracking.auto_publish(run) == "uploaded"
+    second_download = tracking.fetch_runs(root)[0]
+    assert first_download != second_download
+    assert len(first.downloads) == len(second.downloads) == 3
+    assert (first_download / "result.json").read_bytes() == (
+        second_download / "result.json"
+    ).read_bytes()
     assert first.create_count == second.create_count == 1
     assert len(list((root / ".tracking").iterdir())) == 2
 
@@ -1516,3 +1552,153 @@ def test_duplicate_remote_diagnostics_do_not_echo_untrusted_metadata(setup_track
     assert tracking.list_remote_runs(issues=issues) == []
     assert issues[0]["owner"] == issues[0]["experiment"] == "unknown"
     assert "SECRET" not in json.dumps(issues)
+
+
+def test_partial_summary_batch_retries_only_missing_values(setup_tracking, monkeypatch):
+    root, client, make_run, enable = setup_tracking
+    run = make_run()
+    enable()
+    original = client.log_batch
+    failed = False
+
+    def partially_record(run_id, *, metrics, params, tags, synchronous):
+        nonlocal failed
+        if not failed:
+            failed = True
+            original(run_id, metrics=metrics, params=params, tags=[], synchronous=synchronous)
+            raise ConnectionError("summary response lost")
+        return original(run_id, metrics=metrics, params=params, tags=tags, synchronous=synchronous)
+
+    monkeypatch.setattr(client, "log_batch", partially_record)
+    assert tracking.sync_runs(root)["pending"] == 1
+    remote = next(iter(client.runs.values()))
+    assert remote.data.tags[tracking.PREFIX + "complete"] == "false"
+    assert client.uploads == []
+    assert tracking.sync_runs(root)["uploaded"] == 1
+    assert client.batches[1][1:] == ([], [])
+    assert len(client.batch_tags[1]) == 3
+    assert sum(len(batch[1]) for batch in client.batches) == 3
+    assert tracking.auto_publish(run) == "already_synced"
+    assert len(client.batches) == 2
+
+
+@pytest.mark.parametrize(
+    "artifact_uri",
+    [
+        None,
+        "file:///private/result",
+        "/private/result",
+        "s3://bucket/result",
+        "runs:/other-run/result",
+        "http://tracking.example:5000/api/2.0/mlflow-artifacts/artifacts/1/run/artifacts",
+        "mlflow-artifacts://outside.example/1/run/artifacts",
+        "mlflow-artifacts://tracking.example:5001/1/run/artifacts",
+        "mlflow-artifacts://user:SECRET@tracking.example:5000/1/run/artifacts",
+        "mlflow-artifacts:/1/../run/artifacts",
+        "mlflow-artifacts:/1/./run/artifacts",
+        "mlflow-artifacts:/1/%2e%2e/run/artifacts",
+        "mlflow-artifacts:/1/run/artifacts?redirect=SECRET",
+        "mlflow-artifacts:/1/run/artifacts#fragment",
+        "mlflow-artifacts:/1\\run/artifacts",
+        "mlflow-artifacts:/1/\nrun/artifacts",
+        "mlflow-artifacts:/",
+    ],
+)
+def test_fetch_rejects_unsafe_artifact_location_before_download(setup_tracking, artifact_uri):
+    root, client, make_run, enable = setup_tracking
+    make_run()
+    enable()
+    assert tracking.sync_runs(root)["uploaded"] == 1
+    remote = next(iter(client.runs.values()))
+    remote.info.artifact_uri = artifact_uri
+    with pytest.raises(tracking.BundleError, match="safe proxy"):
+        tracking.fetch_runs(root)
+    assert client.downloads == []
+    assert not list((root / ".remote").glob("*/*/result.json"))
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "/result.json",
+        "../result.json",
+        "bundle/../result.json",
+        "bundle//result.json",
+        "bundle\\result.json",
+        "bundle/\nresult.json",
+    ],
+)
+def test_download_rejects_unsafe_relative_path(tmp_path, monkeypatch, relative):
+    import mlflow.artifacts
+
+    monkeypatch.setattr(
+        mlflow.artifacts, "download_artifacts", lambda **kwargs: pytest.fail("No request allowed")
+    )
+    remote = SimpleNamespace(info=SimpleNamespace(artifact_uri="mlflow-artifacts:/1/run/artifacts"))
+    with pytest.raises(tracking.BundleError, match="safe proxy"):
+        tracking._download_artifact(remote, relative, tmp_path, "http://tracking.example:5000")
+
+
+def test_direct_artifact_download_uses_authenticated_proxy_without_run_or_model_lookups(
+    tmp_path, monkeypatch
+):
+    import base64
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    requests = []
+    body = b"verified artifact bytes"
+    secret = base64.b64encode(b"member:password").decode()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append((self.path, self.headers.get("Authorization")))
+            parsed = urlsplit(self.path)
+            path = unquote(parsed.path)
+            if path == "/team/api/3.0/mlflow/server-info":
+                response = b"{}"
+            elif path == "/team/api/2.0/mlflow-artifacts/artifacts":
+                response = b'{"files": []}'
+            elif path in {
+                "/team/api/2.0/mlflow-artifacts/artifacts/1/run/artifacts/bundle/result.json",
+                "/team/api/2.0/mlflow-artifacts/artifacts/1/run/artifacts/reproduction/models/모델 1.txt",
+            }:
+                response = body
+            else:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+
+        def log_message(self, format, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv("MLFLOW_TRACKING_USERNAME", "member")
+    monkeypatch.setenv("MLFLOW_TRACKING_PASSWORD", "password")
+    monkeypatch.setenv("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "0")
+    monkeypatch.delenv("MLFLOW_TRACKING_TOKEN", raising=False)
+    monkeypatch.delenv("MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD", raising=False)
+    uri = f"http://127.0.0.1:{server.server_port}/team"
+    try:
+        for authority, filename in (
+            ("", "bundle/result.json"),
+            (f"//127.0.0.1:{server.server_port}", "reproduction/models/모델 1.txt"),
+        ):
+            remote = SimpleNamespace(
+                info=SimpleNamespace(artifact_uri=f"mlflow-artifacts:{authority}/1/run/artifacts")
+            )
+            actual = tracking._download_artifact(remote, filename, tmp_path, uri)
+            assert actual.read_bytes() == body
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    assert all(auth == f"Basic {secret}" for _, auth in requests)
+    assert len(requests) == 5  # Two listings + two files + one cached capability lookup.
+    assert sum("?path=" in path for path, _ in requests) == 2
+    assert sum(path == "/team/api/3.0/mlflow/server-info" for path, _ in requests) == 1
+    assert not any("/runs/" in path or "/logged-models/" in path for path, _ in requests)
