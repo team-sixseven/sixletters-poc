@@ -11,7 +11,6 @@ import shlex
 import shutil
 import socket
 import subprocess
-import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -19,6 +18,12 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 import pytest
+from docker_completion import (
+    assert_remote_completion,
+    published_runs_from_response,
+    wait_for_local_completion,
+)
+from docker_timing import command_stage, stage
 from test_tracking_docker import tracking_server  # noqa: F401
 from tornado.httpclient import HTTPRequest
 from tornado.websocket import websocket_connect
@@ -94,19 +99,20 @@ def docker_workspace(tmp_path_factory):
             # Rebuild tests later in the suite must still exercise a real Compose build.
             arguments = tuple("--no-build" if item == "--build" else item for item in arguments)
             prebuilt_start = False
-        completed = subprocess.run(
-            arguments,
-            cwd=workspace,
-            env=environment,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=timeout,
-        )
-        assert completed.returncode == expected_returncode, (
-            f"{arguments!r} failed with exit code {completed.returncode}\n"
-            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
-        )
+        with command_stage("workspace", arguments):
+            completed = subprocess.run(
+                arguments,
+                cwd=workspace,
+                env=environment,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=timeout,
+            )
+            assert completed.returncode == expected_returncode, (
+                f"{arguments!r} failed with exit code {completed.returncode}\n"
+                f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+            )
         return completed.stderr if error_output else completed.stdout
 
     yield workspace, run, notebook_port
@@ -369,7 +375,15 @@ def connected_tracking_workspace(docker_workspace, server, *, purpose):
         # it between temporary networks can invalidate Docker's published port.
         run("docker", "network", "connect", network, workspace_id)
         connected = True
-        yield workspace_id, experiment_id, (username, password)
+        yield (
+            workspace_id,
+            experiment_id,
+            (username, password),
+            (
+                "http://tracking:5000",
+                experiment_name,
+            ),
+        )
     finally:
         settings.unlink(missing_ok=True)
         if connected:
@@ -410,12 +424,12 @@ def train_retry_runs(workspace, run, *, owner_prefix, personal_packages=False):
     return local_runs
 
 
-def wait_for_published_runs(server, experiment_id, credentials, local_runs):
-    # The retry interval is not an upload deadline: authenticated file uploads
-    # and an existing queue can take longer on shared CI machines.
-    deadline = time.monotonic() + 180
-    published = {}
-    while time.monotonic() < deadline:
+def wait_for_published_runs(server, experiment_id, credentials, local_runs, configuration):
+    with stage("recovery.local_result_completion"):
+        expected_remote_ids = wait_for_local_completion(local_runs, configuration)
+    with stage("recovery.remote_result_validation"):
+        # Local state only ends the wait. The independent authenticated response must
+        # still confirm every exact remote identity and completed result.
         response = server["request"](
             "/api/2.0/mlflow/runs/search",
             {
@@ -425,39 +439,20 @@ def wait_for_published_runs(server, experiment_id, credentials, local_runs):
             },
             credentials=credentials,
         )
-        published = {
-            tags["sixletters.local_run_id"]: remote
-            for remote in response.get("runs", [])
-            if (tags := {tag["key"]: tag["value"] for tag in remote["data"]["tags"]})
-            and tags.get("sixletters.local_run_id") in local_runs
-        }
-        if set(published) == set(local_runs):
-            break
-        time.sleep(5)
-    if set(published) != set(local_runs):
-        remaining = server["request"](
-            "/api/2.0/mlflow/runs/search",
-            {"experiment_ids": [experiment_id], "max_results": 100},
-            credentials=credentials,
-        )
-        states = [
-            {"status": remote["info"]["status"], "tags": remote["data"].get("tags", [])}
-            for remote in remaining.get("runs", [])
-        ]
-        pytest.fail(f"Background retry did not finish both saved runs; server states: {states}")
-    for local_id, saved in local_runs.items():
-        assert saved["hashes"] == {
-            path.relative_to(saved["directory"]).as_posix(): hashlib.sha256(
-                path.read_bytes()
-            ).hexdigest()
-            for path in saved["directory"].rglob("*")
-            if path.is_file()
-        }
-        assert {metric["key"] for metric in published[local_id]["data"]["metrics"]} == {
-            "roc_auc",
-            "average_precision",
-            "brier_score",
-        }
+        published = published_runs_from_response(response, expected_remote_ids, experiment_id)
+        for local_id, saved in local_runs.items():
+            assert saved["hashes"] == {
+                path.relative_to(saved["directory"]).as_posix(): hashlib.sha256(
+                    path.read_bytes()
+                ).hexdigest()
+                for path in saved["directory"].rglob("*")
+                if path.is_file()
+            }
+            assert {metric["key"] for metric in published[local_id]["data"]["metrics"]} == {
+                "roc_auc",
+                "average_precision",
+                "brier_score",
+            }
     return published
 
 
@@ -468,14 +463,18 @@ def test_workspace_worker_retries_saved_runs_when_tracking_returns(
     workspace, run, _ = docker_workspace
     server = tracking_server
     with connected_tracking_workspace(docker_workspace, server, purpose="result-retry") as context:
-        workspace_id, experiment_id, credentials = context
+        workspace_id, experiment_id, credentials, configuration = context
         server["run"]("stop", "tracking")
-        local_runs = train_retry_runs(
-            workspace, run, owner_prefix="result-retry", personal_packages=True
-        )
+        with stage("recovery.prepare_experiments"):
+            local_runs = train_retry_runs(
+                workspace, run, owner_prefix="result-retry", personal_packages=True
+            )
         # Both personal script processes have exited. Only the live worker can retry.
         server["run"]("up", "-d", "--wait")
-        published = wait_for_published_runs(server, experiment_id, credentials, local_runs)
+        with stage("recovery.result_publication"):
+            published = wait_for_published_runs(
+                server, experiment_id, credentials, local_runs, configuration
+            )
         assert run("docker", "compose", "ps", "-q", "cpu").strip() == workspace_id
         remote_comparison = "Global/artifacts/retry-remote-comparison.csv"
         run(
@@ -502,61 +501,63 @@ def test_workspace_worker_retries_selected_archive_when_tracking_returns(
     workspace, run, _ = docker_workspace
     server = tracking_server
     with connected_tracking_workspace(docker_workspace, server, purpose="archive-retry") as context:
-        workspace_id, experiment_id, credentials = context
-        local_runs = train_retry_runs(
-            workspace, run, owner_prefix="archive-retry", personal_packages=True
-        )
-        published = wait_for_published_runs(server, experiment_id, credentials, local_runs)
+        workspace_id, experiment_id, credentials, configuration = context
+        with stage("recovery.prepare_experiments"):
+            local_runs = train_retry_runs(
+                workspace, run, owner_prefix="archive-retry", personal_packages=True
+            )
+        with stage("recovery.initial_result_publication"):
+            published = wait_for_published_runs(
+                server, experiment_id, credentials, local_runs, configuration
+            )
         # Selection made offline must survive the command exiting and be retried
         # by the workspace worker without promoting other local runs.
         selected_id, selected_run = next(iter(local_runs.items()))
         server["run"]("stop", "tracking")
-        response = run(
-            "./dev",
-            "archive",
-            "--run",
-            selected_run["directory"].relative_to(workspace).as_posix(),
-            expected_returncode=1,
-        )
-        assert "pending" in response
+        with stage("recovery.offline_archive_request"):
+            response = run(
+                "./dev",
+                "archive",
+                "--run",
+                selected_run["directory"].relative_to(workspace).as_posix(),
+                expected_returncode=1,
+            )
+            assert "pending" in response
         server["run"]("up", "-d", "--wait")
         remote_id = published[selected_id]["info"]["run_id"]
-        deadline = time.monotonic() + 180
-        archive_status = None
-        while time.monotonic() < deadline:
-            remote = server["request"](
-                f"/api/2.0/mlflow/runs/get?run_id={remote_id}", credentials=credentials
-            )["run"]
-            tags = {tag["key"]: tag["value"] for tag in remote["data"]["tags"]}
-            archive_status = tags.get("sixletters.archive_status")
-            if archive_status == "complete":
-                break
-            time.sleep(5)
-        assert archive_status == "complete"
-        assert run("docker", "compose", "ps", "-q", "cpu").strip() == workspace_id
-        for local_id, base in published.items():
-            remote = server["request"](
-                f"/api/2.0/mlflow/runs/get?run_id={base['info']['run_id']}",
-                credentials=credentials,
-            )["run"]
-            tags = {tag["key"]: tag["value"] for tag in remote["data"]["tags"]}
-            assert remote["info"]["status"] == "FINISHED"
-            assert tags["sixletters.complete"] == "true"
-            assert tags["sixletters.archive_status"] == (
-                "complete" if local_id == selected_id else "none"
+        with stage("recovery.archive_publication"):
+            wait_for_local_completion(
+                {selected_id: selected_run},
+                configuration,
+                archive=True,
+                expected_remote_ids={selected_id: remote_id},
             )
-            if local_id == selected_id:
-                root = remote["info"]["artifact_uri"].removeprefix("mlflow-artifacts:")
-                for filename in ("resources/environment.json", "models/model.pkl"):
-                    uploaded = server["request"](
-                        f"/api/2.0/mlflow-artifacts/artifacts{root}/reproduction/{filename}",
-                        credentials=credentials,
-                    )
-                    expected = (selected_run["directory"] / filename).read_bytes()
-                    if isinstance(uploaded, dict):
-                        assert uploaded == json.loads(expected)
-                    else:
-                        assert uploaded == expected
+        assert run("docker", "compose", "ps", "-q", "cpu").strip() == workspace_id
+        with stage("recovery.remote_archive_validation"):
+            for local_id, base in published.items():
+                remote = server["request"](
+                    f"/api/2.0/mlflow/runs/get?run_id={base['info']['run_id']}",
+                    credentials=credentials,
+                )["run"]
+                assert_remote_completion(
+                    remote,
+                    local_id=local_id,
+                    remote_id=base["info"]["run_id"],
+                    experiment_id=experiment_id,
+                    archive_status="complete" if local_id == selected_id else "none",
+                )
+                if local_id == selected_id:
+                    root = remote["info"]["artifact_uri"].removeprefix("mlflow-artifacts:")
+                    for filename in ("resources/environment.json", "models/model.pkl"):
+                        uploaded = server["request"](
+                            f"/api/2.0/mlflow-artifacts/artifacts{root}/reproduction/{filename}",
+                            credentials=credentials,
+                        )
+                        expected = (selected_run["directory"] / filename).read_bytes()
+                        if isinstance(uploaded, dict):
+                            assert uploaded == json.loads(expected)
+                        else:
+                            assert uploaded == expected
 
 
 def test_personal_notebook_kernel_runs_packages_and_survives_workspace_restart(docker_workspace):

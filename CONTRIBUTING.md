@@ -68,6 +68,8 @@ git commit -m "experiment: 임상 데이터 기본 모델 비교"
 
 Free 비공개 저장소에서는 조건이 강제되지 않으므로 직접 확인한다. `develop` PR은 Linux와 필요한 Docker·MLflow 검사를 실행하고, Windows·macOS는 실행 환경 변경에 필요한 항목만 확인한다. 병렬 검사의 일부만 끝났다면 최종 `validate`를 기다린다. 검사 미실행은 성공이 아니다. [CI 실행 기준](Global/docs/github-setup.md#자동-검사)
 
+Docker 검사가 오래 걸리거나 실패하면 해당 작업의 로그·실행 요약에 있는 `Docker phase timings`에서 지연·실패 단계를 확인한다.
+
 **실험 리뷰에서 확인할 것:**
 
 - 전처리·변수 선택·학습에 학습 환자만 사용했는가? 검증·테스트 정답이나 사후 정보가 섞이지 않았는가?

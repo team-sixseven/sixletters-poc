@@ -6,7 +6,7 @@
 
 **계속 켜 둘 서버 한 대에서만** 설정한다. CPU 서버로 충분하며, 학습용 CPU·GPU 환경과 별도의 Docker Compose 구성을 사용한다.
 
-서버에도 저장소를 받은 뒤 Ubuntu 터미널에서 실행한다.
+서버에도 Docker Engine 25 이상·Compose 2.40.3 이상을 준비하고 저장소를 받은 뒤 Ubuntu 터미널에서 실행한다.
 
 ```sh
 cp .env.tracking.example .env.tracking

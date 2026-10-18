@@ -39,6 +39,7 @@ x-workspace: &workspace
     interval: 5s
     timeout: 5s
     start_period: 60s
+    start_interval: 1s
     retries: 6
   shm_size: "2gb"
 

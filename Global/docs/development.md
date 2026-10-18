@@ -42,7 +42,7 @@ docker compose version
 git --version
 ```
 
-Docker Compose는 **2.40.3 이상**을 사용한다. 버전이 낮으면 Docker Desktop을 업데이트한다. Docker Engine을 직접 설치한 환경에서는 Compose 플러그인을 업데이트한다.
+Docker Engine은 **25 이상**, Compose는 **2.40.3 이상**을 사용한다. 기동 중 준비 상태를 1초마다 확인하는 설정에 Engine 25 이상이 필요하다. 버전이 낮으면 Docker Desktop을 업데이트한다. Docker Engine을 직접 설치한 환경에서는 Engine과 Compose 플러그인을 업데이트한다. [Docker 상태 확인 설정](https://docs.docker.com/reference/dockerfile/#healthcheck)
 
 Docker 서버 정보와 지원 버전을 확인하면 [README의 시작 절차](../../README.md#1-저장소와-실행-환경-준비)를 따른다. Docker Desktop은 작업하는 동안 실행 상태로 둔다.
 

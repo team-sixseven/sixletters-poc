@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 import pytest
+from docker_timing import command_stage, stage
 
 from scripts.ci_docker_cache import prepare_prebuilt_image
 from sixletters.comparison import compare_runs
@@ -74,18 +75,19 @@ def tracking_server(tmp_path_factory):
         if prebuilt_start and arguments[:1] == ("up",):
             arguments = tuple("--no-build" if item == "--build" else item for item in arguments)
             prebuilt_start = False
-        completed = subprocess.run(
-            [*compose, *arguments],
-            cwd=workspace,
-            env=environment,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=timeout,
-        )
-        assert completed.returncode == 0, (
-            f"Compose {arguments!r} failed\n{completed.stdout}\n{completed.stderr}"
-        )
+        with command_stage("tracking", arguments):
+            completed = subprocess.run(
+                [*compose, *arguments],
+                cwd=workspace,
+                env=environment,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=timeout,
+            )
+            assert completed.returncode == 0, (
+                f"Compose {arguments!r} failed\n{completed.stdout}\n{completed.stderr}"
+            )
         return completed.stdout
 
     uri = f"http://127.0.0.1:{port}"
@@ -326,7 +328,7 @@ def test_six_independent_training_processes_sync_and_compare(
         assert password not in synced.stdout + synced.stderr
         return markers[0].parent
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    with stage("tracking.six_member_train_and_sync"), ThreadPoolExecutor(max_workers=6) as pool:
         local_runs = list(pool.map(train, range(6)))
     for key, value in {
         "MLFLOW_TRACKING_URI": server["uri"],
@@ -358,29 +360,31 @@ def test_six_independent_training_processes_sync_and_compare(
         assert summary["already_synced"] == 1
         assert summary["uploaded"] == summary["invalid"] == summary["pending"] == 0
     assert len(client.search_runs([experiment.experiment_id])) == 6
-    remote_dirs = fetch_runs(tmp_path / "reviewer" / "artifacts")
+    with stage("tracking.download_results"):
+        remote_dirs = fetch_runs(tmp_path / "reviewer" / "artifacts")
     assert len(remote_dirs) == 6
     comparison_path = tmp_path / "six-members.csv"
-    compared = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "sixletters",
-            "compare",
-            "--remote",
-            "--root",
-            str(tmp_path / "reviewer" / "artifacts"),
-            "--output",
-            str(comparison_path),
-        ],
-        cwd=workspaces[0],
-        input="1 2 3 4 5 6\n",
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=60,
-    )
-    assert compared.returncode == 0, compared.stderr
+    with stage("tracking.compare_results"):
+        compared = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "sixletters",
+                "compare",
+                "--remote",
+                "--root",
+                str(tmp_path / "reviewer" / "artifacts"),
+                "--output",
+                str(comparison_path),
+            ],
+            cwd=workspaces[0],
+            input="1 2 3 4 5 6\n",
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+        )
+        assert compared.returncode == 0, compared.stderr
     assert "95%" in compared.stdout
     comparison = pd.read_csv(comparison_path)
     assert set(comparison.owner) == set(owners)
@@ -418,14 +422,15 @@ def test_six_independent_training_processes_sync_and_compare(
 
     # A selected run is expanded in place; cached comparison inputs remain valid.
     selected = next(run for run in remote_runs if run.data.tags["sixletters.owner"] == owners[0])
-    archived = subprocess.run(
-        [sys.executable, "-m", "sixletters", "archive", "--run", str(local_runs[0])],
-        cwd=workspaces[0],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    assert archived.returncode == 0, archived.stderr
+    with stage("tracking.archive_model"):
+        archived = subprocess.run(
+            [sys.executable, "-m", "sixletters", "archive", "--run", str(local_runs[0])],
+            cwd=workspaces[0],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert archived.returncode == 0, archived.stderr
     assert len(client.search_runs([experiment.experiment_id])) == 6
     assert client.get_run(selected.info.run_id).data.tags["sixletters.archive_status"] == "complete"
     assert len(client.get_metric_history(selected.info.run_id, "roc_auc")) == 1
@@ -436,7 +441,8 @@ def test_six_independent_training_processes_sync_and_compare(
     username, password = credentials[-1]
     monkeypatch.setenv("MLFLOW_TRACKING_USERNAME", username)
     monkeypatch.setenv("MLFLOW_TRACKING_PASSWORD", password)
-    downloaded = fetch_archive(recipient / "Global/artifacts/.restored", selected.info.run_id)
+    with stage("tracking.download_archive"):
+        downloaded = fetch_archive(recipient / "Global/artifacts/.restored", selected.info.run_id)
     original = json.loads((local_runs[0] / "result.json").read_text())
     assert "전처리 설정.yaml" in original["resources"]
     assert downloaded != local_runs[0]
@@ -450,13 +456,14 @@ def test_six_independent_training_processes_sync_and_compare(
         fetch_archive(recipient / "Global/artifacts/.restored", selected.info.run_id) == downloaded
     )
     restored_name = "restored-exp001"
-    restored_config = restore_run(
-        downloaded,
-        owner=recipient_name,
-        name=restored_name,
-        root=recipient / "Members",
-        data=recipient / "Global/data",
-    )
+    with stage("tracking.restore_model"):
+        restored_config = restore_run(
+            downloaded,
+            owner=recipient_name,
+            name=restored_name,
+            root=recipient / "Members",
+            data=recipient / "Global/data",
+        )
     assert (
         restored_config.parent
         == recipient / "Members" / recipient_name / "experiments" / restored_name
@@ -479,23 +486,24 @@ def test_six_independent_training_processes_sync_and_compare(
         "OMP_NUM_THREADS": "1",
     }
     environment.pop("SIXLETTERS_EXECUTION_JSON", None)
-    retrained = subprocess.run(
-        [
-            sys.executable,
-            str(restored_config.with_name("train.py")),
-            "--config",
-            str(restored_config),
-            "--data",
-            str(recipient / "Global/data"),
-        ],
-        cwd=recipient,
-        env=environment,
-        text=True,
-        encoding="utf-8",
-        capture_output=True,
-        timeout=180,
-    )
-    assert retrained.returncode == 0, retrained.stderr
+    with stage("tracking.retrain_restored_model"):
+        retrained = subprocess.run(
+            [
+                sys.executable,
+                str(restored_config.with_name("train.py")),
+                "--config",
+                str(restored_config),
+                "--data",
+                str(recipient / "Global/data"),
+            ],
+            cwd=recipient,
+            env=environment,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            timeout=180,
+        )
+        assert retrained.returncode == 0, retrained.stderr
     assert password not in retrained.stdout + retrained.stderr
     markers = list(
         (recipient / "Global/artifacts" / recipient_name / restored_name).glob("*/result.json")
