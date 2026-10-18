@@ -228,14 +228,14 @@ def show_comparison_deltas(summary) -> None:
 def personal_experiment(root: Path, owner: str | None, name: str) -> Path:
     owner = owner or read_settings(root).get("owner")
     if not owner:
-        raise ValueError("Register your name with poc init or pass --owner")
+        raise ValueError("Register your name with dev init or pass --owner")
     owner = validate_component(owner, "owner")
     name = validate_component(name, "experiment")
     directory = root / "Members" / owner / "experiments" / name
     if any(path.is_symlink() for path in (directory, *directory.parents) if path != root):
         raise ValueError("Personal experiment directories must not be symbolic links")
     if not directory.is_dir() or not (directory / "config.toml").is_file():
-        raise ValueError("Experiment not found; create it with poc new first")
+        raise ValueError("Experiment not found; create it with dev new first")
     validate_experiment_identity(directory / "config.toml")
     return directory
 
@@ -382,7 +382,7 @@ def main() -> int:
     )
 
     practice = subparsers.add_parser("practice", help="Create your MUSIC practice notebook")
-    practice.add_argument("--owner", help="Override the name registered by poc init")
+    practice.add_argument("--owner", help="Override the name registered by dev init")
 
     demo = subparsers.add_parser("demo", help="Prepare synthetic data for an execution check")
     demo.add_argument("--output", type=Path)
@@ -537,14 +537,14 @@ def main() -> int:
         elif args.command == "new":
             owner = args.owner or read_settings(root).get("owner")
             if not owner:
-                raise ValueError("Register your name with poc init or pass --owner")
+                raise ValueError("Register your name with dev init or pass --owner")
             if args.source:
                 from .workspace import clone_experiment
 
                 source = personal_experiment(root, owner, args.source)
                 path = clone_experiment(source, owner, args.name, root=root / "Members")
                 print(f"실험 복제 완료: {path.parent}")
-                print("복사한 학습 파일·설정을 확인하고 poc exec로 실행하세요.")
+                print("복사한 학습 파일·설정을 확인하고 dev exec로 실행하세요.")
                 return 0
             show_experiment(
                 init_experiment(
@@ -558,9 +558,11 @@ def main() -> int:
                 args.script or "train.py",
             )
         elif args.command == "baselines":
+            from .personal_env import command_prefix
+
             owner = args.owner or read_settings(root).get("owner")
             if not owner:
-                raise ValueError("Register your name with poc init or pass --owner")
+                raise ValueError("Register your name with dev init or pass --owner")
             prefix = validate_component(args.prefix, "baseline prefix")
             specifications = [
                 (f"{prefix}-{short}-{group}", model, group)
@@ -573,7 +575,7 @@ def main() -> int:
                     raise ValueError("A baseline experiment already exists; use a new prefix")
             for name, model, group in specifications:
                 init_experiment(owner, name, feature_set=group, model=model, root=root / "Members")
-                command = ["./dev", "exec", name]
+                command = [*command_prefix(), "exec", name]
                 if args.owner:
                     command.extend(["--owner", owner])
                 command.append("train.py")
@@ -587,7 +589,7 @@ def main() -> int:
 
             owner = args.owner or read_settings(root).get("owner")
             if not owner:
-                raise ValueError("Register your name with poc init or pass --owner")
+                raise ValueError("Register your name with dev init or pass --owner")
             if args.run or args.run_id:
                 source = args.run or fetch_archive(root / "Global/artifacts/.restored", args.run_id)
             elif args.remote:
@@ -730,10 +732,10 @@ def main() -> int:
         elif args.command == "practice":
             owner = args.owner or read_settings(root).get("owner")
             if not owner:
-                raise ValueError("Register your name with poc init or pass --owner")
+                raise ValueError("Register your name with dev init or pass --owner")
             path = init_practice(owner, root=root / "Members")
             print(f"개인 실습 노트북: {path.relative_to(root).as_posix()}")
-            print("MUSIC 데이터가 없으면 poc music을 실행하세요.")
+            print("MUSIC 데이터가 없으면 dev music을 실행하세요.")
             print(
                 "JupyterLab에서 노트북을 열고 Kernel → Restart Kernel and Run All Cells를 선택하세요."
             )
@@ -752,7 +754,7 @@ def main() -> int:
             print(f"MUSIC {args.cohort} common inputs verified: {path}")
             print(f"Preparation rules: {path.with_name('protocol.json')}")
             print(f"Patient counts and data checks: {path.with_name('report.json')}")
-            print(f"처음 등록: poc init (준비된 {relative} 경로를 기본값으로 제시합니다.)")
+            print(f"처음 등록: dev init (준비된 {relative} 경로를 기본값으로 제시합니다.)")
             print("Personal settings and train.py are unchanged; training starts separately.")
         elif args.command == "sync":
             from .tracking import sync_runs
@@ -781,7 +783,7 @@ def main() -> int:
             if outcome == "pending":
                 print(
                     "Model archive pending. Keep the local run; the workspace retries selected "
-                    "archives. Run poc sync for an immediate retry."
+                    "archives. Run dev sync for an immediate retry."
                 )
                 return 1
             if outcome == "already_synced":

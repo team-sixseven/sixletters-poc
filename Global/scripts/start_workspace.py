@@ -59,6 +59,8 @@ def main() -> int:
                 "--ServerApp.port=8888",
                 "--ServerApp.port_retries=0",
                 "--ServerApp.root_dir=/workspace",
+                # Login shells reset PATH and hide the image's shared Python environment.
+                '--ServerApp.terminado_settings={"shell_command": ["/bin/bash"]}',
                 "--no-browser",
             ],
         )

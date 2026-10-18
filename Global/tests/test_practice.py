@@ -79,7 +79,7 @@ def test_explicit_owner_does_not_require_or_change_local_settings(checkout):
     assert not (checkout / ".poc.local.toml").exists()
     missing = cli(checkout)
     assert missing.returncode == 2
-    assert "poc init" in missing.stderr
+    assert "dev init" in missing.stderr
 
 
 @pytest.mark.parametrize("owner", ["../outside", "a/b", "CON", " leading", 'bad"name'])

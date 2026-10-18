@@ -373,7 +373,7 @@ def test_remote_basic_result_requires_selected_archive(tmp_path, setup_tracking)
     make_run()
     enable()
     tracking.sync_runs(root)
-    with pytest.raises(ValueError, match="poc archive"):
+    with pytest.raises(ValueError, match="dev archive"):
         fetch_archive(tmp_path.resolve() / "cache", next(iter(client.runs)))
     assert not client.downloads
 

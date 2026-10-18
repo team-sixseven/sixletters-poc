@@ -20,7 +20,7 @@ ecg = ["wfdb>=4.2,<5", "neurokit2>=0.2.10,<0.3"]
 gpu = ["torch==2.13.0; sys_platform == 'linux' and platform_machine == 'x86_64'"]
 
 [project.scripts]
-poc = "sixletters.__main__:main"
+dev = "sixletters.__main__:main"
 
 [dependency-groups]
 dev = ["pytest>=8,<10", "ruff>=0.14,<0.15", "pre-commit>=4,<5", "nbstripout>=0.9,<0.10"]

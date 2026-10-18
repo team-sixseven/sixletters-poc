@@ -26,7 +26,7 @@ def main() -> int:
     )
     root = project_root(Path(__file__).resolve().parent)
     parser.add_argument(
-        "--data", type=Path, help="Override the data location registered by poc init"
+        "--data", type=Path, help="Override the data location registered by dev init"
     )
     parser.add_argument("--config", type=Path, default=Path(__file__).with_name("config.toml"))
     parser.add_argument("--output-root", type=Path, default=root / "Global/artifacts")

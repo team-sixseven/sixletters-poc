@@ -60,7 +60,7 @@ class BlockHeavyImports:
 
 sys.meta_path.insert(0, BlockHeavyImports())
 from sixletters.__main__ import main
-sys.argv = ['poc', *sys.argv[1:]]
+sys.argv = ['dev', *sys.argv[1:]]
 raise SystemExit(main())
 """
     completed = run(checkout, "-c", script, *arguments, input_text="\n")

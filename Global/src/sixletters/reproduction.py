@@ -16,6 +16,7 @@ from filelock import FileLock
 from .contracts import _hash_json
 from .data.prepared import BUNDLE_FILENAME, load_prepared_dataset
 from .experiment import _load_config
+from .personal_env import command_prefix
 from .provenance import _check_unique_paths, file_hash, resource_metadata
 from .workspace import _reject_ambiguous_name, validate_component
 
@@ -50,7 +51,7 @@ def _portable_path(name: str) -> PurePosixPath:
 def _validate_entries(entries: dict) -> None:
     if not isinstance(entries, dict) or not _BASIC_FILES.issubset(entries):
         raise ValueError(
-            "모델·코드를 포함한 전체 재현 파일이 필요합니다. 먼저 poc archive를 실행하세요."
+            "모델·코드를 포함한 전체 재현 파일이 필요합니다. 먼저 dev archive를 실행하세요."
         )
     for name, info in entries.items():
         path = _portable_path(name)
@@ -337,7 +338,7 @@ def fetch_archive(cache_root: Path, remote_run_id: str) -> Path:
         ):
             raise ValueError(
                 "모델·재현 파일 보관이 완료되지 않았습니다. "
-                "전체 원본 결과가 있는 컴퓨터에서 poc archive를 완료하세요."
+                "전체 원본 결과가 있는 컴퓨터에서 dev archive를 완료하세요."
             )
         cache = _no_symlinks(cache_root) / ".reproduction" / tracking._server_key(uri)
         _no_symlinks(cache)
@@ -460,7 +461,7 @@ def _prediction_steps(
             [
                 shlex.join(
                     [
-                        "./dev",
+                        *command_prefix(),
                         "exec",
                         "--owner",
                         owner,
@@ -491,7 +492,7 @@ def _prediction_steps(
     commands = [
         shlex.join(
             [
-                "./dev",
+                *command_prefix(),
                 "restore",
                 restored_name,
                 "--owner",
@@ -502,13 +503,13 @@ def _prediction_steps(
                 data_path,
             ]
         ),
-        shlex.join(["./dev", "env", "sync", restored_name, "--owner", target_owner]),
+        shlex.join([*command_prefix(), "env", "sync", restored_name, "--owner", target_owner]),
     ]
     if template_matches:
         commands.append(
             shlex.join(
                 [
-                    "./dev",
+                    *command_prefix(),
                     "exec",
                     "--owner",
                     target_owner,
@@ -591,7 +592,14 @@ def final_plan_status(plan_directory: Path, data: Path, root: Path) -> dict:
     if candidates and counts["complete"] == len(candidates) and not report.exists():
         commands.append(
             shlex.join(
-                ["./dev", "final", "report", directory.name, "--data", _status_path(data, root)]
+                [
+                    *command_prefix(),
+                    "final",
+                    "report",
+                    directory.name,
+                    "--data",
+                    _status_path(data, root),
+                ]
             )
         )
     if _plan(directory) != plan:

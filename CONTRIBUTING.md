@@ -1,6 +1,6 @@
 # 식스세븐 협업 규칙
 
-첫 설치·학습은 [README](README.md)를 따른다. 아래 명령은 Docker를 켜 둔 상태에서 **Ubuntu 터미널의 저장소 폴더**에서 실행한다.
+첫 설치·학습은 [README](README.md)를 따른다. 아래 명령은 Docker를 켜 둔 상태에서 **Ubuntu·macOS 터미널의 저장소 폴더**에서 실행한다. Jupyter의 **Launcher → Terminal**에서는 데이터 준비·학습·비교 명령의 `./dev`를 `dev`로 바꿔 실행한다.
 
 ```text
 이슈 → 작업 브랜치 → PR·리뷰·검사 → develop(팀 통합) → 릴리스 PR → main(제출)

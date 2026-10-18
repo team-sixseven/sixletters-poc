@@ -1398,13 +1398,13 @@ def test_archive_prequeue_permission_error_is_sanitized_in_cli_and_never_queued(
 
     monkeypatch.setattr(tracking, "_local_manifest", denied)
     monkeypatch.setattr(cli, "project_root", lambda: root.parent)
-    monkeypatch.setattr(sys, "argv", ["poc", "archive", "--run", str(run)])
+    monkeypatch.setattr(sys, "argv", ["dev", "archive", "--run", str(run)])
     with pytest.raises(SystemExit, match="2"):
         cli.main()
     output = capsys.readouterr().err
     assert "[local_permission]" in output
     assert "권한" in output
-    assert "poc archive" in output
+    assert "dev archive" in output
     assert "선택 요청은 저장되지 않았습니다" in output
     for private in ("SECRET", "/private/credentials", "https://secret.example"):
         assert private not in output

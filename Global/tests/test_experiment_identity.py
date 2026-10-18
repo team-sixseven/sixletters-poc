@@ -75,7 +75,7 @@ def test_cli_rejects_copied_identity_before_creating_or_running_environment(
     monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
     calls = []
     monkeypatch.setattr(personal_env, "execute_script", lambda *args: calls.append(args))
-    monkeypatch.setattr(sys, "argv", ["poc", "exec", "exp001", "--owner", "Alice", "train.py"])
+    monkeypatch.setattr(sys, "argv", ["dev", "exec", "exp001", "--owner", "Alice", "train.py"])
     with pytest.raises(SystemExit) as error:
         cli.main()
     assert error.value.code == 2

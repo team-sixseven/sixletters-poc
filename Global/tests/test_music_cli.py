@@ -23,7 +23,7 @@ def checkout(tmp_path, monkeypatch):
 
 
 def invoke(monkeypatch, *arguments, answers=()):
-    monkeypatch.setattr(sys, "argv", ["poc", *arguments])
+    monkeypatch.setattr(sys, "argv", ["dev", *arguments])
     prompts = []
     values = iter(answers)
 

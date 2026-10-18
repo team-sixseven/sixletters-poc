@@ -305,7 +305,7 @@ def test_compare_cli_preserves_selection_order_and_displays_saved_reference(
     reference = runs[0] if explicit_reference else selected[0]
     reference_id = read_result(reference)["run_id"]
     output = tmp_path / "cli.csv"
-    arguments = ["poc", "compare", "--runs", *map(str, selected), "--output", str(output)]
+    arguments = ["dev", "compare", "--runs", *map(str, selected), "--output", str(output)]
     if explicit_reference:
         arguments += ["--reference", reference_id]
     monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
@@ -356,7 +356,7 @@ def test_remote_compare_cli_fetches_in_selected_order_and_distinguishes_referenc
     output = tmp_path / "remote-cli.csv"
     cache = tmp_path / "cache"
     arguments = [
-        "poc",
+        "dev",
         "compare",
         "--remote",
         "--run-ids",

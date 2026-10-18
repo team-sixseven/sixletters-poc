@@ -49,7 +49,7 @@ def test_worker_rejects_invalid_retry_interval(monkeypatch, interval):
 @pytest.mark.parametrize(("pending", "expected"), [(0, 0), (1, 1)])
 def test_sync_cli_reports_pending_status(monkeypatch, tmp_path, pending, expected):
     monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
-    monkeypatch.setattr(sys, "argv", ["poc", "sync"])
+    monkeypatch.setattr(sys, "argv", ["dev", "sync"])
 
     def sync(root):
         assert root == tmp_path / "Global/artifacts"
@@ -82,7 +82,7 @@ def test_remote_compare_downloads_only_selected_runs_and_uses_shared_comparator(
     remote_catalog[1]["synthetic"] = None
     remote = [tmp_path / ".remote" / str(index) for index in range(6)]
     monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
-    monkeypatch.setattr(sys, "argv", ["poc", "compare", "--remote", "--mode", "inputs"])
+    monkeypatch.setattr(sys, "argv", ["dev", "compare", "--remote", "--mode", "inputs"])
     monkeypatch.setattr(tracking, "list_remote_runs", lambda **_kwargs: remote_catalog)
     events = []
 
@@ -118,7 +118,7 @@ def test_remote_compare_rejects_invalid_selection_before_downloading(
     monkeypatch, tmp_path, remote_catalog, selection
 ):
     monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
-    monkeypatch.setattr(sys, "argv", ["poc", "compare", "--remote"])
+    monkeypatch.setattr(sys, "argv", ["dev", "compare", "--remote"])
     monkeypatch.setattr(tracking, "list_remote_runs", lambda **_kwargs: remote_catalog)
     monkeypatch.setattr("builtins.input", lambda _: selection)
     monkeypatch.setattr(tracking, "fetch_runs", lambda *args, **kwargs: pytest.fail("downloaded"))
@@ -127,7 +127,7 @@ def test_remote_compare_rejects_invalid_selection_before_downloading(
 
 
 def test_remote_cli_rejects_local_run_arguments(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["poc", "compare", "--remote", "--runs", "one", "two"])
+    monkeypatch.setattr(sys, "argv", ["dev", "compare", "--remote", "--runs", "one", "two"])
     with pytest.raises(SystemExit, match="2"):
         cli.main()
 
@@ -166,7 +166,7 @@ def test_archive_cli_uses_explicit_run_and_does_not_report_pending_as_success(
 ):
     selected = tmp_path / "팀원 가" / "exp001" / "run"
     monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
-    monkeypatch.setattr(sys, "argv", ["poc", "archive", "--run", str(selected)])
+    monkeypatch.setattr(sys, "argv", ["dev", "archive", "--run", str(selected)])
     received = []
 
     def archive(run):
@@ -177,7 +177,7 @@ def test_archive_cli_uses_explicit_run_and_does_not_report_pending_as_success(
     assert cli.main() == exit_code
     assert received == [selected]
     if outcome == "pending":
-        assert "poc sync" in capsys.readouterr().out
+        assert "dev sync" in capsys.readouterr().out
 
 
 def test_archive_interactively_selects_a_single_local_run(monkeypatch, tmp_path):
@@ -198,7 +198,7 @@ def test_archive_interactively_selects_a_single_local_run(monkeypatch, tmp_path)
         )
     )
     monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
-    monkeypatch.setattr(sys, "argv", ["poc", "archive"])
+    monkeypatch.setattr(sys, "argv", ["dev", "archive"])
     monkeypatch.setattr("builtins.input", lambda _: "1")
     received = []
     monkeypatch.setattr(tracking, "archive_run", lambda path: received.append(path) or "uploaded")
@@ -215,7 +215,7 @@ def test_archive_interactively_selects_a_single_local_run(monkeypatch, tmp_path)
 
 
 def test_archive_rejects_ambiguous_location(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["poc", "archive", "--run", "one", "--root", "two"])
+    monkeypatch.setattr(sys, "argv", ["dev", "archive", "--run", "one", "--root", "two"])
     with pytest.raises(SystemExit, match="2"):
         cli.main()
 
@@ -289,7 +289,7 @@ def test_remote_compare_discloses_duplicates_once_before_selecting_healthy_runs(
     monkeypatch, tmp_path, remote_catalog, duplicate_issue, capsys
 ):
     monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
-    monkeypatch.setattr(sys, "argv", ["poc", "compare", "--remote"])
+    monkeypatch.setattr(sys, "argv", ["dev", "compare", "--remote"])
 
     def catalog(*, issues):
         issues.append(duplicate_issue)
@@ -326,7 +326,7 @@ def test_new_duplicate_during_fetch_is_reported_even_when_compare_cannot_continu
     monkeypatch, tmp_path, remote_catalog, duplicate_issue, capsys, explicit
 ):
     monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
-    arguments = ["poc", "compare", "--remote"]
+    arguments = ["dev", "compare", "--remote"]
     if explicit:
         arguments += ["--run-ids", "b" * 32, "d" * 32]
     monkeypatch.setattr(sys, "argv", arguments)
@@ -351,7 +351,7 @@ def test_new_duplicate_during_fetch_is_reported_even_when_compare_cannot_continu
 
 def test_sync_cli_reports_unreadable_directory_and_nonzero_exit(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
-    monkeypatch.setattr(sys, "argv", ["poc", "sync"])
+    monkeypatch.setattr(sys, "argv", ["dev", "sync"])
     issue = {
         "scope": "scan",
         "path": "member/exp001",

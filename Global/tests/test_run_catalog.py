@@ -195,7 +195,7 @@ def test_sync_cli_explains_each_failed_run_and_ignores_unstructured_exception(
     tmp_path, monkeypatch, capsys
 ):
     monkeypatch.setattr(cli, "project_root", lambda: tmp_path)
-    monkeypatch.setattr(sys, "argv", ["poc", "sync"])
+    monkeypatch.setattr(sys, "argv", ["dev", "sync"])
     monkeypatch.setattr(
         tracking,
         "sync_runs",

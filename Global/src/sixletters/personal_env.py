@@ -752,15 +752,21 @@ def _installed_matches(path: Path, manifest: dict, lock: str) -> bool:
         return False
 
 
-def _env_command(experiment: Path, action: str, *options: str) -> str:
+def command_prefix() -> list[str]:
+    """Choose the command available in the caller's terminal."""
     context = os.environ.get("SIXLETTERS_COMMAND_CONTEXT")
     in_container = (
         os.environ.get("SIXLETTERS_CONTAINER") == "1"
         or Path("/opt/poc/dependencies.sha256").is_file()
     )
-    command = ["poc" if context != "host" and in_container else "./dev"]
+    command = ["dev" if context != "host" and in_container else "./dev"]
     if context == "host" and os.environ.get("SIXLETTERS_COMMAND_GPU") == "gpu":
         command.append("--gpu")
+    return command
+
+
+def _env_command(experiment: Path, action: str, *options: str) -> str:
+    command = command_prefix()
     command.extend(["env", action, experiment.name])
     owner = _member_directory(experiment)
     if owner is not None:

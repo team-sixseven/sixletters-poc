@@ -55,7 +55,7 @@ case "$command" in
   compare [--remote] 로컬 또는 공용 서버에서 비교할 실험 결과 선택
   tracking <작업>    공용 서버 up/down/logs/status/user (서버 운영 장비에서)
 
-학습: ./dev exec exp001 train.py 또는 ./dev shell 안에서 poc exec exp001 train.py
+학습: ./dev exec exp001 train.py 또는 ./dev shell 안에서 dev exec exp001 train.py
 GPU: ./dev up --gpu -d --wait
 프로젝트 명령 도움말: ./dev <명령> --help
 HELP
@@ -137,7 +137,7 @@ esac
 
 run() {
     command_context=container
-    if [ "${1:-}" = poc ]; then command_context=host; fi
+    if [ "${1:-}" = dev ]; then command_context=host; fi
     running=$(compose ps --status running --quiet "$service")
     if [ -n "$running" ]; then
         if [ "${POC_NO_TTY:-0}" = 1 ] || [ ! -t 0 ] || [ ! -t 1 ]; then
@@ -167,7 +167,7 @@ case "$command" in
         fi
         # A stale image must still be able to explain why it needs rebuilding.
         compose exec -T -e POC_SKIP_DEPENDENCY_CHECK=1 -e SIXLETTERS_COMMAND_CONTEXT=host \
-            -e SIXLETTERS_COMMAND_GPU="$service" "$service" poc-container poc status "$@"
+            -e SIXLETTERS_COMMAND_GPU="$service" "$service" poc-container python -m sixletters status "$@"
         ;;
     url)
         if [ "$#" -ne 0 ]; then echo '사용법: ./dev url' >&2; exit 2; fi
@@ -220,7 +220,7 @@ case "$command" in
         if [ "$#" -eq 0 ]; then
             compose up --build "$service"
         else
-            run poc notebook "$@"
+            run dev notebook "$@"
         fi
         ;;
     verify)
@@ -241,6 +241,6 @@ case "$command" in
         fi
         ;;
     *)
-        run poc "$command" "$@"
+        run dev "$command" "$@"
         ;;
 esac
