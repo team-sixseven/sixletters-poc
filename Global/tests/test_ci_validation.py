@@ -1,6 +1,5 @@
 """A selective workflow must never accept missing, failed, or malformed checks."""
 
-import itertools
 import json
 import os
 import subprocess
@@ -62,11 +61,7 @@ def test_accepts_documentation_linux_and_full_coverage(needs):
 
 @pytest.mark.parametrize(
     "docker",
-    [
-        list(subset)
-        for size in range(4)
-        for subset in itertools.combinations(["workspace", "recovery", "tracking"], size)
-    ],
+    [[], *[[scenario] for scenario in sorted(ci_validate.DOCKER)], sorted(ci_validate.DOCKER)],
 )
 def test_accepts_each_docker_subset_only_when_its_job_has_the_matching_result(docker):
     needs = workflow(docker=docker)
@@ -189,7 +184,7 @@ def test_docker_output_rejects_unknown_duplicate_and_nonstring_entries(value):
 
 
 @pytest.mark.parametrize(
-    "scope", [{"smoke": True}, {"native": ci_validate.NATIVE}, {"docker": ["workspace"]}]
+    "scope", [{"smoke": True}, {"native": ci_validate.NATIVE}, {"docker": ["training"]}]
 )
 def test_extended_checks_cannot_bypass_linux_tests(scope):
     with pytest.raises(ValueError, match="require Linux tests"):
@@ -272,7 +267,7 @@ def test_test_mode_cannot_reduce_or_disagree_with_selected_tests(value):
 
 
 @pytest.mark.parametrize(
-    "extra", [{"smoke": True}, {"docker": ["workspace"]}, {"native": ci_validate.NATIVE}]
+    "extra", [{"smoke": True}, {"docker": ["training"]}, {"native": ci_validate.NATIVE}]
 )
 def test_personal_mode_cannot_replace_full_tests_for_integrations(extra):
     with pytest.raises(ValueError, match="full regression"):

@@ -9,10 +9,20 @@ import tomllib
 from pathlib import Path, PurePosixPath
 
 NATIVE = ["windows-2025", "macos-26"]
-DOCKER = ["workspace", "recovery", "tracking"]
-# The workspace suite includes the CLI checks; select the small suite only when
-# no broader workspace scenario is needed.
-DOCKER_SUITES = ["cli", *DOCKER]
+# Every scenario starts independently; no scenario implicitly replaces another.
+DOCKER = [
+    "cli",
+    "training",
+    "lifecycle",
+    "notebooks",
+    "member",
+    "result-retry",
+    "archive-retry",
+    "tracking",
+]
+DOCKER_SUITES = DOCKER
+WORKSPACE_SCENARIOS = set(DOCKER) - {"tracking"}
+TRANSFER_SCENARIOS = {"result-retry", "archive-retry", "tracking"}
 DEPENDENCIES = {
     "Global/pyproject.toml",
     "Global/uv.lock",
@@ -43,7 +53,6 @@ WORKSPACE_ENVIRONMENT = {
     "Global/scripts/container_entrypoint.py",
     "Global/scripts/workspace_health.py",
     "Global/scripts/check_environment.py",
-    "Global/scripts/tracking_worker.py",
 }
 TRACKING_ENVIRONMENT = {
     "Global/Dockerfile.tracking",
@@ -51,26 +60,56 @@ TRACKING_ENVIRONMENT = {
     ".env.tracking.example",
     "Global/scripts/start_tracking_server.py",
 }
-RESULT_PROTOCOL = {
-    "Global/src/sixletters/__init__.py",
-    "Global/src/sixletters/__main__.py",
-    "Global/src/sixletters/experiment.py",
-    "Global/src/sixletters/provenance.py",
-    "Global/src/sixletters/workspace.py",
-    "Global/src/sixletters/personal_env.py",
-    "Global/src/sixletters/notebook_workspace.py",
-    "Global/src/sixletters/execution.py",
-    "Global/src/sixletters/local_settings.py",
-    "Global/scripts/migrate_layout.py",
-    "Global/tests/conftest.py",
-    "conftest.py",
+# Select the real container boundaries affected by each shared feature. Result
+# format/environment metadata consumers include archive restoration, not only save.
+SOURCE_DOCKER = {
+    "Global/src/sixletters/__init__.py": set(DOCKER),
+    "Global/src/sixletters/__main__.py": set(DOCKER),
+    "Global/src/sixletters/experiment.py": {"training", *TRANSFER_SCENARIOS},
+    "Global/src/sixletters/provenance.py": {"training", *TRANSFER_SCENARIOS},
+    "Global/src/sixletters/workspace.py": {"training", "notebooks", "member", "tracking"},
+    "Global/src/sixletters/personal_env.py": {
+        "training",
+        "notebooks",
+        "member",
+        *TRANSFER_SCENARIOS,
+    },
+    "Global/src/sixletters/notebook_workspace.py": {"notebooks"},
+    "Global/src/sixletters/execution.py": {"training", "member", "tracking"},
+    "Global/src/sixletters/local_settings.py": {
+        "cli",
+        "training",
+        "notebooks",
+        "member",
+        "tracking",
+    },
+    "Global/scripts/migrate_layout.py": {"cli", "lifecycle"},
+    "Global/scripts/tracking_worker.py": {"result-retry", "archive-retry"},
+    "Global/src/sixletters/tracking.py": TRANSFER_SCENARIOS,
+    "Global/src/sixletters/tracking_diagnostics.py": TRANSFER_SCENARIOS,
+    "Global/src/sixletters/reproduction.py": {"member", "tracking"},
+    "Global/src/sixletters/comparison.py": {"tracking"},
 }
-TRACKING_CLIENT = {
-    "Global/src/sixletters/tracking.py",
-    "Global/src/sixletters/tracking_diagnostics.py",
-    "Global/src/sixletters/reproduction.py",
-    "Global/tests/test_tracking_docker.py",  # Also supplies the recovery server fixture.
+EXPERIMENT_TEMPLATE_SCENARIOS = {"training", "notebooks", "member", *TRANSFER_SCENARIOS}
+# These areas have no Docker/process boundary of their own. Unrecognized common
+# code is deliberately not included: adding a new integration must fail closed.
+LINUX_ONLY = {
+    ".pre-commit-config.yaml",
+    ".gitignore",
+    "Global/scripts/check_repository.py",
+    "Global/src/sixletters/contracts.py",
+    "Global/src/sixletters/evaluation.py",
+    "Global/src/sixletters/final_evaluation.py",
+    "Global/src/sixletters/final_metrics.py",
+    "Global/src/sixletters/run_catalog.py",
+    "Global/src/sixletters/workspace_status.py",
 }
+LINUX_ONLY_PREFIXES = (
+    "Global/src/sixletters/data/",
+    "Global/src/sixletters/features/",
+    "Global/templates/practice/",
+)
+
 CLI_TESTS = {
     "Global/tests/test_cli_registration.py",
     "Global/tests/test_local_workflow.py",
@@ -116,6 +155,10 @@ NATIVE_SOURCE_TESTS = {
     "Global/src/sixletters/provenance.py": {"Global/tests/test_experiment_provenance.py"},
     "Global/src/sixletters/reproduction.py": {"Global/tests/test_reproduction.py"},
 }
+# Conservative develop-PR fallback still checks every native boundary, without
+# repeating platform-independent statistical/data tests on each operating system.
+NATIVE_FALLBACK_TESTS = sorted(set().union(*NATIVE_SOURCE_TESTS.values(), CLI_TESTS))
+
 SMOKE = {
     "Global/scripts/smoke_check.py",
     "Global/tests/test_smoke_check.py",
@@ -133,6 +176,15 @@ def full_scope() -> dict:
         "native_mode": "full",
         "native_tests": [],
         "docker": DOCKER.copy(),
+    }
+
+
+def pr_full_scope() -> dict:
+    """Unknown/shared infrastructure changes need all boundaries, not all OS tests."""
+    return {
+        **full_scope(),
+        "native_mode": "focused",
+        "native_tests": NATIVE_FALLBACK_TESTS.copy(),
     }
 
 
@@ -232,8 +284,10 @@ def select_scope(
     root: Path | None = None,
     scripts_only: bool = False,
 ) -> dict:
-    if full or not paths:
+    if full:
         return full_scope()
+    if not paths:
+        return pr_full_scope()
     root = root or Path(__file__).resolve().parents[2]
     if any(
         path in CI_FILES
@@ -244,11 +298,11 @@ def select_scope(
         and not (path == "Global/pyproject.toml" and scripts_only)
         for path in paths
     ):
-        return full_scope()
+        return pr_full_scope()
     changed_tests = {path for path in paths if path.startswith("Global/tests/")}
     selected = affected_tests(root, changed_tests) if changed_tests else set()
     if selected is None:
-        return full_scope()
+        return pr_full_scope()
     tests = smoke = personal = False
     suites = set()
     native_tests = (
@@ -268,7 +322,7 @@ def select_scope(
     )
     if "Global/pyproject.toml" in paths and scripts_only:
         if not all((root / name).is_file() for name in CLI_TESTS):
-            return full_scope()
+            return pr_full_scope()
         selected.update(CLI_TESTS)
         suites.add("cli")
     native_selected = set(native_tests)
@@ -277,7 +331,7 @@ def select_scope(
     if "Global/pyproject.toml" in paths and scripts_only:
         native_selected.add("Global/tests/test_cli_registration.py")
     if any(not (root / name).is_file() for name in native_selected):
-        return full_scope()
+        return pr_full_scope()
     native_tests = sorted(native_selected)
     for path in [*paths, *selected]:
         if path == "Global/pyproject.toml" and scripts_only:
@@ -306,14 +360,14 @@ def select_scope(
             continue
         if path.startswith("Global/tests/"):
             if path == "Global/tests/test_docker_workflow.py":
-                suites.update(("workspace", "recovery"))
+                suites.update(WORKSPACE_SCENARIOS)
             elif path in {
                 "Global/tests/test_docker_cli.py",
                 "Global/tests/test_cli_registration.py",
             }:
                 suites.add("cli")
             elif path == "Global/tests/test_tracking_docker.py":
-                suites.update(("recovery", "tracking"))
+                suites.update(TRANSFER_SCENARIOS)
             elif path == "Global/tests/test_smoke_check.py":
                 smoke = True
             continue
@@ -321,33 +375,26 @@ def select_scope(
             personal = True
         elif path in WORKSPACE_ENVIRONMENT:
             tests = smoke = True
-            suites.update(("workspace", "recovery"))
+            suites.update(WORKSPACE_SCENARIOS)
         elif path in TRACKING_ENVIRONMENT:
             tests = smoke = True
-            suites.update(("recovery", "tracking"))
-        elif path in RESULT_PROTOCOL or path.startswith("Global/templates/experiment/"):
+            suites.update(TRANSFER_SCENARIOS)
+        elif path in SOURCE_DOCKER:
             tests = True
-            suites.update(DOCKER)
-        elif path in TRACKING_CLIENT:
+            suites.update(SOURCE_DOCKER[path])
+        elif path.startswith("Global/templates/experiment/"):
             tests = True
-            suites.update(("recovery", "tracking"))
-        elif path == "Global/src/sixletters/comparison.py":
-            tests = True
-            suites.add("tracking")
+            suites.update(EXPERIMENT_TEMPLATE_SCENARIOS)
         elif path in SMOKE:
             tests = smoke = True
-        elif path in {".pre-commit-config.yaml", ".gitignore"} or path.startswith(
-            ("Global/src/", "Global/scripts/", "Global/templates/", "Global/notebooks/")
-        ):
+        elif path in LINUX_ONLY or path.startswith(LINUX_ONLY_PREFIXES):
             tests = True
         else:
-            return full_scope()
+            return pr_full_scope()
     # Mixed personal and focused changes still exercise the shared personal contract.
     if personal and selected:
         selected.update(PERSONAL_TESTS)
     mode = "full" if tests else "focused" if selected else "personal" if personal else "none"
-    if "workspace" in suites:
-        suites.discard("cli")
     return {
         "tests": mode != "none",
         "tests_mode": mode,
@@ -379,18 +426,21 @@ def event_scope(event_name: str, event: dict) -> dict:
         pr = event["pull_request"]
         if pr["base"]["ref"] != "develop":
             return full_scope()
-        before, after = pr["base"]["sha"], pr["head"]["sha"]
     except (KeyError, TypeError):
         return full_scope()
+    try:
+        before, after = pr["base"]["sha"], pr["head"]["sha"]
+    except (KeyError, TypeError):
+        return pr_full_scope()
     if not isinstance(before, str) or not isinstance(after, str) or not before or not after:
-        return full_scope()
+        return pr_full_scope()
     changed = subprocess.run(
         ["git", "diff", "--name-only", "--no-renames", "-z", f"{before}...{after}", "--"],
         capture_output=True,
         check=False,
     )
     if changed.returncode:
-        return full_scope()
+        return pr_full_scope()
     paths = changed.stdout.decode("utf-8", errors="replace").rstrip("\0").split("\0")
     root = Path.cwd()
     ancestor = subprocess.run(

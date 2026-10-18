@@ -6,8 +6,130 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from scripts import ci_docker_cache as cache
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize(
+    "paths, expected",
+    [([path], ["workspace", "tracking"]) for path in sorted(cache.SHARED_INPUTS)]
+    + [
+        (["Global/Dockerfile"], ["workspace"]),
+        (["Global/Dockerfile.tracking"], ["tracking"]),
+        (["Global/scripts/start_tracking_server.py"], ["tracking"]),
+        (["Global/Dockerfile", "Global/Dockerfile.tracking"], ["workspace", "tracking"]),
+        (["Global/src/sixletters/experiment.py", "Members/alice/train.py", "README.md"], []),
+    ],
+)
+def test_shared_cache_selection_matches_only_reusable_build_inputs(paths, expected):
+    assert cache.shared_cache_images(paths) == expected
+
+
+@pytest.mark.parametrize(
+    "ref, event_name, expected",
+    [
+        ("refs/heads/develop", "workflow_dispatch", ["workspace", "tracking"]),
+        ("refs/heads/main", "workflow_dispatch", []),
+        ("refs/heads/feature", "workflow_dispatch", []),
+        ("refs/pull/24/merge", "pull_request", []),
+        ("refs/heads/develop", "pull_request_target", []),
+    ],
+)
+def test_shared_cache_updates_are_restricted_to_trusted_develop(ref, event_name, expected):
+    assert (
+        cache.warm_cache_scope(ROOT, {"GITHUB_REF": ref, "GITHUB_EVENT_NAME": event_name})
+        == expected
+    )
+
+
+def test_shared_cache_push_uses_entire_pushed_diff_and_includes_removed_inputs(
+    tmp_path, monkeypatch
+):
+    before, after = "1" * 40, "2" * 40
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"before": before, "after": after}), encoding="utf-8")
+    calls = []
+
+    def run(arguments, **kwargs):
+        calls.append((arguments, kwargs))
+        return SimpleNamespace(stdout="README.md\0Global/Dockerfile.tracking\0")
+
+    monkeypatch.setattr(cache.subprocess, "run", run)
+    assert cache.warm_cache_scope(
+        tmp_path,
+        {
+            "GITHUB_REF": "refs/heads/develop",
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_EVENT_PATH": str(event),
+        },
+    ) == ["tracking"]
+    assert calls[0][0] == ["git", "diff", "--name-only", "-z", "--no-renames", before, after, "--"]
+    assert calls[0][1]["cwd"] == tmp_path
+    assert calls[0][1]["check"] is True
+
+
+@pytest.mark.parametrize(
+    "before, after, expected",
+    [("0" * 40, "1" * 40, ["workspace", "tracking"]), ("1" * 40, "0" * 40, [])],
+)
+def test_new_and_deleted_develop_pushes_do_not_require_a_missing_revision(
+    tmp_path, monkeypatch, before, after, expected
+):
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"before": before, "after": after}), encoding="utf-8")
+    monkeypatch.setattr(cache.subprocess, "run", lambda *a, **kw: pytest.fail("Unexpected diff"))
+    assert (
+        cache.warm_cache_scope(
+            tmp_path,
+            {
+                "GITHUB_REF": "refs/heads/develop",
+                "GITHUB_EVENT_NAME": "push",
+                "GITHUB_EVENT_PATH": str(event),
+            },
+        )
+        == expected
+    )
+
+
+def test_cache_workflow_is_independent_and_cannot_write_from_pr_events():
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/docker-cache.yml").read_text(encoding="utf-8")
+    )
+    events = workflow[True]  # PyYAML's YAML 1.1 loader treats the GitHub key `on` as true.
+    assert set(events) == {"push", "workflow_dispatch"}
+    assert events["push"]["branches"] == ["develop"]
+    assert set(events["push"]["paths"]) == set.union(*cache.CACHE_INPUTS.values())
+    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["jobs"]["scope"]["if"] == "github.ref == 'refs/heads/develop'"
+    assert workflow["jobs"]["warm"]["needs"] == "scope"
+    assert workflow["jobs"]["warm"]["strategy"]["fail-fast"] is False
+
+    steps = workflow["jobs"]["warm"]["steps"]
+    builders = [step for step in steps if step.get("uses", "").startswith("docker/build-push")]
+    assert len(builders) == 2
+    assert builders[0]["with"]["target"] == "cpu-dependencies"
+    for step, kind in zip(builders, ("workspace", "tracking"), strict=True):
+        settings = step["with"]
+        assert settings["context"] == "."
+        assert settings["cache-from"] == f"type=gha,scope={kind}-shared-v1"
+        assert settings["cache-to"] == f"type=gha,scope={kind}-shared-v1,mode=max,timeout=2m"
+        assert "push" not in settings and "tags" not in settings and "load" not in settings
+
+    main = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    pins = {
+        step["uses"]
+        for job in main["jobs"].values()
+        for step in job.get("steps", [])
+        if "uses" in step
+    }
+    for job in workflow["jobs"].values():
+        for step in job["steps"]:
+            if "uses" in step:
+                assert step["uses"] in pins
+    assert "warm" not in main["jobs"]["final_gate"]["needs"]
 
 
 @pytest.fixture

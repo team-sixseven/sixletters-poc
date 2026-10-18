@@ -142,15 +142,7 @@ jobs:
       fail-fast: false
       matrix:
         suite: ${{ fromJSON(needs.scope.outputs.docker || '[]') }}
-        phase: [core, notebooks, member]
-        exclude:
-          - {suite: cli, phase: notebooks}
-          - {suite: cli, phase: member}
-          - {suite: recovery, phase: notebooks}
-          - {suite: recovery, phase: member}
-          - {suite: tracking, phase: notebooks}
-          - {suite: tracking, phase: member}
-    name: docker (${{ matrix.suite }}, ${{ matrix.phase }})
+    name: docker (${{ matrix.suite }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-compose-action@54042514f505b273907334ae2b9cdbb9a0213c1a # v2.4.0
@@ -173,12 +165,14 @@ jobs:
           tags: sixseven-ci:cpu
           labels: io.sixseven.ci.input-sha256=${{ steps.docker_inputs.outputs.workspace_fingerprint }}
           cache-from: |
-            type=gha,scope=workspace-${{ matrix.suite }}-${{ matrix.phase }}-v1
+            type=gha,scope=workspace-${{ matrix.suite }}-v2
             type=gha,scope=workspace-${{ matrix.suite }}-v1
-          cache-to: type=gha,scope=workspace-${{ matrix.suite }}-${{ matrix.phase }}-v1,mode=max,timeout=2m,ignore-error=true
+            type=gha,scope=workspace-workspace-core-v1
+            type=gha,scope=workspace-shared-v1
+          cache-to: type=gha,scope=workspace-${{ matrix.suite }}-v2,mode=max,timeout=2m,ignore-error=true
       - name: Build cached tracking image
         id: tracking_image
-        if: matrix.suite == 'recovery' || matrix.suite == 'tracking'
+        if: matrix.suite == 'result-retry' || matrix.suite == 'archive-retry' || matrix.suite == 'tracking'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -186,7 +180,10 @@ jobs:
           load: true
           tags: sixseven-ci:tracking
           labels: io.sixseven.ci.input-sha256=${{ steps.docker_inputs.outputs.tracking_fingerprint }}
-          cache-from: type=gha,scope=tracking-${{ matrix.suite }}-v1
+          cache-from: |
+            type=gha,scope=tracking-${{ matrix.suite }}-v1
+            type=gha,scope=tracking-recovery-v1
+            type=gha,scope=tracking-shared-v1
           cache-to: type=gha,scope=tracking-${{ matrix.suite }}-v1,mode=max,timeout=2m,ignore-error=true
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
@@ -201,25 +198,30 @@ jobs:
           POC_DOCKER_WORKSPACE_IMAGE: ${{ steps.workspace_image.outputs.imageid }}
           POC_DOCKER_TRACKING_IMAGE: ${{ steps.tracking_image.outputs.imageid }}
           SUITE: ${{ matrix.suite }}
-          PHASE: ${{ matrix.phase }}
         run: |
-          case "$SUITE/$PHASE" in
-            cli/core)
+          case "$SUITE" in
+            cli)
               uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_cli.py -q --durations=5
               ;;
-            workspace/core)
-              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py::test_gpu_configuration_is_opt_in_and_cpu_needs_no_nvidia_device Global/tests/test_docker_workflow.py::test_compose_up_starts_workspace_trains_and_preserves_results -q --durations=5
+            training)
+              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py::test_workspace_trains_saves_and_compares_results -q --durations=5
               ;;
-            workspace/notebooks)
+            lifecycle)
+              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py::test_gpu_configuration_is_opt_in_and_cpu_needs_no_nvidia_device Global/tests/test_docker_workflow.py::test_workspace_restart_preserves_results_and_rebuilds_changed_dependencies -q --durations=5
+              ;;
+            notebooks)
               uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py::test_personal_notebook_kernel_runs_packages_and_survives_workspace_restart -q --durations=5
               ;;
-            workspace/member)
+            member)
               uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py::test_member_environment_reuse_isolation_and_reproduction -q --durations=5
               ;;
-            recovery/core)
+            result-retry)
               uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py::test_workspace_worker_retries_saved_runs_when_tracking_returns -q --durations=5
               ;;
-            tracking/core)
+            archive-retry)
+              uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_docker_workflow.py::test_workspace_worker_retries_selected_archive_when_tracking_returns -q --durations=5
+              ;;
+            tracking)
               uv run --project Global --locked pytest -c Global/pyproject.toml Global/tests/test_tracking_docker.py -q --durations=5
               ;;
             *) echo 'Unknown Docker suite'; exit 1 ;;

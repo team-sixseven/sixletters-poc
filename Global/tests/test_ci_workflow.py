@@ -1,12 +1,13 @@
 """Protect complete shard matrices and independently runnable Docker coverage."""
 
 import ast
-import itertools
 import re
 from pathlib import Path
 
 import pytest
 import yaml
+
+from scripts.ci_scope import DOCKER
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -34,30 +35,14 @@ def test_full_platform_matrix_requires_all_four_shards(jobs, job, mode):
     assert job in jobs["final_gate"]["needs"]
 
 
-def test_docker_matrix_runs_each_independent_phase_once(jobs):
+def test_docker_matrix_runs_each_independent_scenario_once(jobs):
     matrix = jobs["docker"]["strategy"]["matrix"]
-    assert matrix["phase"] == ["core", "notebooks", "member"]
-    pairs = [
-        (suite, phase)
-        for suite, phase in itertools.product(
-            ("cli", "workspace", "recovery", "tracking"), matrix["phase"]
-        )
-        if {"suite": suite, "phase": phase} not in matrix["exclude"]
-    ]
-    assert pairs == [
-        ("cli", "core"),
-        ("workspace", "core"),
-        ("workspace", "notebooks"),
-        ("workspace", "member"),
-        ("recovery", "core"),
-        ("tracking", "core"),
-    ]
+    assert set(matrix) == {"suite"}
+    assert matrix["suite"] == "${{ fromJSON(needs.scope.outputs.docker || '[]') }}"
     command = next(
         step for step in jobs["docker"]["steps"] if step.get("name") == "Verify Docker integration"
     )
-    assert set(re.findall(r"^\s+([a-z]+/[a-z]+)\)", command["run"], re.M)) == {
-        f"{suite}/{phase}" for suite, phase in pairs
-    }
+    assert set(re.findall(r"^\s+([a-z-]+)\)", command["run"], re.M)) == set(DOCKER)
     source = ast.parse((ROOT / "Global/tests/test_docker_workflow.py").read_text(encoding="utf-8"))
     tests = {
         node.name
@@ -67,6 +52,22 @@ def test_docker_matrix_runs_each_independent_phase_once(jobs):
     targets = re.findall(r"Global/tests/test_docker_workflow\.py::(test_\w+)", command["run"])
     assert len(targets) == len(set(targets))
     assert set(targets) == tests
+    for filename in ("test_docker_cli.py", "test_tracking_docker.py"):
+        assert command["run"].count(f"Global/tests/{filename} ") == 1
     assert not jobs["docker"].get("continue-on-error")
     assert not command.get("continue-on-error")
     assert "docker" in jobs["final_gate"]["needs"]
+
+
+def test_docker_images_read_shared_cache_without_waiting_for_cache_warm(jobs):
+    assert jobs["docker"]["needs"] == "scope"
+    steps = jobs["docker"]["steps"]
+    workspace = next(step for step in steps if step.get("id") == "workspace_image")
+    tracking = next(step for step in steps if step.get("id") == "tracking_image")
+    assert "scope=workspace-shared-v1" in workspace["with"]["cache-from"]
+    assert "scope=tracking-shared-v1" in tracking["with"]["cache-from"]
+    assert "shared" not in workspace["with"]["cache-to"]
+    assert "shared" not in tracking["with"]["cache-to"]
+    assert "result-retry" in tracking["if"]
+    assert "archive-retry" in tracking["if"]
+    assert "tracking" in tracking["if"]
