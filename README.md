@@ -9,6 +9,41 @@
 
 </details>
 
+<details>
+<summary>실제 사용 화면 보기</summary>
+
+합성 데이터로 실행한 예시이며, MUSIC 데이터의 분석 결과나 모델 성능을 나타내지 않는다.
+
+**작업 환경:** JupyterLab에서 공통·개인 폴더를 확인하고 터미널을 연다.
+
+![JupyterLab 폴더와 터미널](Global/docs/assets/screenshots/01-workspace.jpg)
+
+**학습·저장:** 개인 코드를 실행하면 실행별 결과가 로컬에 저장된다.
+
+![개인 학습 실행과 결과 저장](Global/docs/assets/screenshots/02-training.jpg)
+
+**결과 비교:** 선택한 실행을 기준으로 점수 차이와 95% 신뢰구간을 확인한다.
+
+![기준 실행 대비 점수 차이와 신뢰구간](Global/docs/assets/screenshots/03-comparison.jpg)
+
+**개인 노트북:** 실험에 연결된 커널로 분석 코드를 실행한다.
+
+![개인 분석 노트북과 실험 커널](Global/docs/assets/screenshots/04-notebook.jpg)
+
+**팀 결과:** MLflow에서 이름별 실행과 점수를 함께 확인한다.
+
+![MLflow 팀 실험 목록과 지표](Global/docs/assets/screenshots/05-mlflow-runs.jpg)
+
+**모델 보관:** 선택한 실행의 모델·코드·재현 파일은 `reproduction/`에 추가로 보관된다.
+
+![MLflow에 보관한 모델과 재현 파일](Global/docs/assets/screenshots/06-model-artifacts.jpg)
+
+**최종 평가:** 고정한 후보를 평가해 제출용 표와 그래프를 만든다.
+
+![최종 평가 보고서 그래프](Global/docs/assets/screenshots/07-final-evaluation.jpg)
+
+</details>
+
 ## 1. 저장소와 실행 환경 준비
 
 Windows는 **WSL2 Ubuntu·Git·Docker Compose 2.40.3 이상**을 준비한다. [설치·접근 확인](Global/docs/development.md#1-wsl2와-docker-확인)
