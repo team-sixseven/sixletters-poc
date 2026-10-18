@@ -292,6 +292,68 @@ def test_worker_publishes_only_comparison_files_after_local_completion(setup_tra
     assert len(client.batches) == 1
 
 
+def test_upload_retry_and_archive_lock_an_established_file(setup_tracking, monkeypatch):
+    root, client, make_run, enable = setup_tracking
+    run = make_run()
+    enable()
+    real_lock = tracking.FileLock
+    locked_paths = []
+
+    def established_lock(path, **kwargs):
+        # Creating the file in FileLock's first open is unsafe on Docker bind mounts.
+        assert Path(path).is_file()
+        locked_paths.append(Path(path))
+        return real_lock(path, **kwargs)
+
+    monkeypatch.setattr(tracking, "FileLock", established_lock)
+    assert tracking.sync_runs(root)["uploaded"] == 1
+    assert tracking.sync_runs(root, retry_only=True)["already_synced"] == 1
+    assert tracking.archive_run(run) == "uploaded"
+    assert len(locked_paths) == 3
+    assert len(set(locked_paths)) == 1
+    assert client.create_count == 1
+
+
+def test_manual_and_worker_sync_share_one_remote_run(setup_tracking):
+    root, client, make_run, enable = setup_tracking
+    make_run()
+    enable()
+    start = threading.Barrier(2)
+
+    def synchronize(retry_only):
+        start.wait(timeout=10)
+        return tracking.sync_runs(root, retry_only=retry_only)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(synchronize, (False, True)))
+    assert sum(item["uploaded"] for item in outcomes) == 1
+    assert all(item["invalid"] == 0 for item in outcomes)
+    assert tracking.sync_runs(root, retry_only=True)["already_synced"] == 1
+    assert client.create_count == len(client.batches) == 1
+
+
+def test_lock_creation_failure_keeps_result_pending_without_connecting(setup_tracking, monkeypatch):
+    root, client, make_run, enable = setup_tracking
+    run = make_run()
+    enable()
+    real_open = tracking.os.open
+
+    def cannot_create_lock(path, *args, **kwargs):
+        if Path(path).suffix == ".lock":
+            raise PermissionError("SECRET lock path")
+        return real_open(path, *args, **kwargs)
+
+    with monkeypatch.context() as blocked:
+        blocked.setattr(tracking.os, "open", cannot_create_lock)
+        summary = tracking.sync_runs(root)
+    assert summary["pending"] == 1
+    assert summary["issues"][0]["code"] == "local_permission"
+    assert "SECRET" not in str(summary)
+    assert client.create_count == 0
+    assert (run / "result.json").is_file()
+    assert tracking.sync_runs(root)["uploaded"] == 1
+
+
 def test_offline_save_succeeds_without_secrets_and_sync_recovers(setup_tracking, capsys):
     root, client, make_run, enable = setup_tracking
     enable()

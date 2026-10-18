@@ -11,6 +11,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import textwrap
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -461,6 +462,122 @@ def wait_for_published_runs(server, experiment_id, credentials, local_runs):
     return published
 
 
+def assert_manual_sync_and_worker_share_new_run(workspace, run, server, credentials, saved):
+    """Exercise first-lock creation on the workspace bind mount in separate processes."""
+    probe = workspace / ".poc-cache" / "concurrent-sync"
+    probe.mkdir(parents=True)
+    local_run = saved["directory"]
+    artifacts = probe / "artifacts"
+    shutil.copytree(local_run, artifacts / local_run.relative_to(workspace / "Global/artifacts"))
+    experiment_name = f"concurrent-sync-{uuid.uuid4().hex}"
+    experiment_id = server["request"](
+        "/api/2.0/mlflow/experiments/create", {"name": experiment_name}
+    )["experiment_id"]
+    script = probe / "probe.py"
+    script.write_text(
+        textwrap.dedent(
+            f"""\
+            import json
+            import os
+            import runpy
+            import sys
+            import threading
+            import time
+            from pathlib import Path
+            from sixletters import tracking
+
+            probe = Path(__file__).parent
+            root = probe / "artifacts"
+            os.environ["MLFLOW_EXPERIMENT_NAME"] = {experiment_name!r}
+
+            def wait_for(path):
+                deadline = time.monotonic() + 90
+                while not path.exists():
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Concurrent synchronization did not reach its checkpoint")
+                    time.sleep(0.05)
+
+            if sys.argv[1] == "manual":
+                original_search = tracking._search
+
+                def paused_search(*args, **kwargs):
+                    matches = original_search(*args, **kwargs)
+                    assert not matches
+                    # The manual process owns the newly created lock and has
+                    # already observed that this identity is absent remotely.
+                    (probe / "manual-ready").touch()
+                    wait_for(probe / "worker-finished")
+                    return matches
+
+                tracking._search = paused_search
+                summary = tracking.sync_runs(root)
+                assert summary["uploaded"] == 1 and summary["invalid"] == 0, summary
+                print(json.dumps(summary))
+            elif sys.argv[1] == "worker":
+                wait_for(probe / "manual-ready")
+                worker = runpy.run_path("Global/scripts/tracking_worker.py")["run_worker"]
+
+                def recorded_sync(*args, **kwargs):
+                    summary = tracking.sync_runs(*args, **kwargs)
+                    (probe / "worker-summary.json").write_text(json.dumps(summary))
+                    return summary
+
+                worker.__globals__["sync_runs"] = recorded_sync
+
+                class OnePassStop(threading.Event):
+                    def wait(self, timeout=None):
+                        self.set()
+                        return True
+
+                try:
+                    worker(root, 5, OnePassStop())
+                finally:
+                    (probe / "worker-finished").touch()
+            else:
+                summary = tracking.sync_runs(root, retry_only=True)
+                assert summary["already_synced"] == 1, summary
+                assert summary["uploaded"] == summary["pending"] == summary["invalid"] == 0
+            """
+        ),
+        encoding="utf-8",
+    )
+    container_script = "/workspace/" + script.relative_to(workspace).as_posix()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        tasks = [
+            pool.submit(
+                run,
+                "./dev",
+                "shell",
+                "-c",
+                f"python {shlex.quote(container_script)} {role}",
+                timeout=180,
+            )
+            for role in ("manual", "worker")
+        ]
+        for task in tasks:
+            task.result()
+    run("./dev", "shell", "-c", f"python {shlex.quote(container_script)} retry")
+    response = server["request"](
+        "/api/2.0/mlflow/runs/search",
+        {
+            "experiment_ids": [experiment_id],
+            "filter": f"tags.`sixletters.local_run_id` = '{local_run.name}'",
+            "max_results": 100,
+        },
+        credentials=credentials,
+    )
+    remote_runs = response.get("runs", [])
+    assert len(remote_runs) == 1, "Manual synchronization and the worker created duplicate runs"
+    assert remote_runs[0]["info"]["status"] == "FINISHED"
+    tags = {tag["key"]: tag["value"] for tag in remote_runs[0]["data"]["tags"]}
+    assert tags["sixletters.complete"] == "true"
+    worker_summary = json.loads((probe / "worker-summary.json").read_text())
+    assert worker_summary["pending"] == 1
+    assert [issue["code"] for issue in worker_summary["issues"]] == ["locked"]
+    state = next((artifacts / ".tracking").glob(f"*/{local_run.name}.json"))
+    assert json.loads(state.read_text())["remote_run_id"] == remote_runs[0]["info"]["run_id"]
+
+
 def test_workspace_worker_retries_saved_runs_when_tracking_returns(
     docker_workspace,
     tracking_server,  # noqa: F811
@@ -493,6 +610,9 @@ def test_workspace_worker_retries_saved_runs_when_tracking_returns(
         for remote in published.values():
             tags = {tag["key"]: tag["value"] for tag in remote["data"]["tags"]}
             assert tags["sixletters.archive_status"] == "none"
+        assert_manual_sync_and_worker_share_new_run(
+            workspace, run, server, credentials, next(iter(local_runs.values()))
+        )
 
 
 def test_workspace_worker_retries_selected_archive_when_tracking_returns(
