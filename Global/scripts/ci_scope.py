@@ -116,24 +116,14 @@ CLI_TESTS = {
     "Global/tests/test_usability_commands.py",
     "Global/tests/test_workspace_launcher.py",
 }
-# These tests exercise OS paths, process locks, interpreters or notebook kernels.
-NATIVE_TEST_WORDS = (
-    "environment",
-    "personal_env",
-    "execution",
-    "workspace",
-    "resources",
-    "notebook",
-    "local_workflow",
-    "layout",
-    "reproduction",
-)
+# Native Python is a compatibility check for execution boundaries, not another
+# copy of result/data regression tests. Keep the mapping explicit: names such as
+# "resources" or "workspace" do not imply a host execution-environment change.
 NATIVE_SOURCE_TESTS = {
     "Global/src/sixletters/personal_env.py": {
         "Global/tests/test_personal_env.py",
         "Global/tests/test_personal_env_publication.py",
         "Global/tests/test_notebook_environment.py",
-        "Global/tests/test_shared_environment_resources.py",
     },
     "Global/src/sixletters/notebook_workspace.py": {
         "Global/tests/test_notebook_workspace.py",
@@ -143,21 +133,19 @@ NATIVE_SOURCE_TESTS = {
         "Global/tests/test_execution_metadata.py",
         "Global/tests/test_personal_environment_cli.py",
     },
-    "Global/src/sixletters/local_settings.py": {"Global/tests/test_local_workflow.py"},
-    "Global/src/sixletters/workspace.py": {
-        "Global/tests/test_workspace.py",
-        "Global/tests/test_experiment_clone.py",
+    "Global/src/sixletters/__main__.py": {
+        "Global/tests/test_cli_registration.py",
+        "Global/tests/test_personal_environment_cli.py",
     },
-    "Global/src/sixletters/experiment.py": {
-        "Global/tests/test_experiment_resources.py",
-        "Global/tests/test_model_resources.py",
-    },
-    "Global/src/sixletters/provenance.py": {"Global/tests/test_experiment_provenance.py"},
-    "Global/src/sixletters/reproduction.py": {"Global/tests/test_reproduction.py"},
 }
-# Conservative develop-PR fallback still checks every native boundary, without
-# repeating platform-independent statistical/data tests on each operating system.
-NATIVE_FALLBACK_TESTS = sorted(set().union(*NATIVE_SOURCE_TESTS.values(), CLI_TESTS))
+# Installation, an installed command and a real personal Jupyter kernel suffice
+# for common dependency compatibility; statistical/regression coverage is Linux.
+NATIVE_DEPENDENCY_TESTS = {
+    "Global/tests/test_cli_registration.py",
+    "Global/tests/test_smoke_check.py",
+    "Global/tests/test_notebook_environment.py",
+}
+NATIVE_TEST_FILES = set().union(*NATIVE_SOURCE_TESTS.values(), NATIVE_DEPENDENCY_TESTS)
 
 SMOKE = {
     "Global/scripts/smoke_check.py",
@@ -180,14 +168,30 @@ def full_scope() -> dict:
     }
 
 
-def pr_full_scope() -> dict:
-    """Unknown/shared infrastructure changes need all boundaries, not all OS tests."""
+def native_scope(tests: set[str]) -> dict:
     return {
-        **full_scope(),
-        "native_mode": "focused",
-        "native_shard_count": 2,
-        "native_tests": NATIVE_FALLBACK_TESTS.copy(),
+        "native": NATIVE.copy() if tests else [],
+        "native_mode": "focused" if tests else "none",
+        "native_shard_count": 1 if tests else 0,
+        "native_tests": sorted(tests),
     }
+
+
+def pr_full_scope(native_tests: set[str] | None = None) -> dict:
+    """Uncertain develop changes keep Linux and all containers, not unrelated hosts."""
+    return {**full_scope(), **native_scope(native_tests or set())}
+
+
+def native_tests_for_paths(paths: list[str], *, scripts_only: bool) -> set[str]:
+    selected = set(paths) & NATIVE_TEST_FILES
+    for path in paths:
+        selected.update(NATIVE_SOURCE_TESTS.get(path, set()))
+        if path in DEPENDENCIES or path.startswith("Global/requirements/"):
+            if path == "Global/pyproject.toml" and scripts_only:
+                selected.add("Global/tests/test_cli_registration.py")
+            else:
+                selected.update(NATIVE_DEPENDENCY_TESTS)
+    return selected
 
 
 def scripts_only_change(before: str, after: str) -> bool:
@@ -291,6 +295,7 @@ def select_scope(
     if not paths:
         return pr_full_scope()
     root = root or Path(__file__).resolve().parents[2]
+    native_tests = native_tests_for_paths(paths, scripts_only=scripts_only)
     if any(
         path in CI_FILES
         or path in {"Global/tests/conftest.py", "conftest.py"}
@@ -300,41 +305,23 @@ def select_scope(
         and not (path == "Global/pyproject.toml" and scripts_only)
         for path in paths
     ):
-        return pr_full_scope()
+        return pr_full_scope(native_tests)
     changed_tests = {path for path in paths if path.startswith("Global/tests/")}
     selected = affected_tests(root, changed_tests) if changed_tests else set()
     if selected is None:
-        return pr_full_scope()
+        return pr_full_scope(native_tests)
     tests = smoke = personal = False
     suites = set()
-    native_tests = (
-        sorted(
-            name
-            for name in selected
-            if any(word in PurePosixPath(name).stem for word in NATIVE_TEST_WORDS)
-            and name
-            not in {
-                "Global/tests/test_docker_workflow.py",
-                "Global/tests/test_docker_workspace_copy.py",
-                "Global/tests/test_practice_execution.py",
-            }
-        )
-        if changed_tests
-        else []
-    )
+    native_tests.update(selected & NATIVE_TEST_FILES)
     if "Global/pyproject.toml" in paths and scripts_only:
         if not all((root / name).is_file() for name in CLI_TESTS):
-            return pr_full_scope()
+            return pr_full_scope(native_tests)
         selected.update(CLI_TESTS)
         suites.add("cli")
-    native_selected = set(native_tests)
-    for path in paths:
-        native_selected.update(NATIVE_SOURCE_TESTS.get(path, set()))
-    if "Global/pyproject.toml" in paths and scripts_only:
-        native_selected.add("Global/tests/test_cli_registration.py")
-    if any(not (root / name).is_file() for name in native_selected):
-        return pr_full_scope()
-    native_tests = sorted(native_selected)
+    if any(not (root / name).is_file() for name in native_tests):
+        # Keep the missing required path in the focused list. Its runner must fail
+        # rather than silently accepting the disappearance of a selected check.
+        return pr_full_scope(native_tests)
     for path in [*paths, *selected]:
         if path == "Global/pyproject.toml" and scripts_only:
             continue
@@ -392,7 +379,7 @@ def select_scope(
         elif path in LINUX_ONLY or path.startswith(LINUX_ONLY_PREFIXES):
             tests = True
         else:
-            return pr_full_scope()
+            return pr_full_scope(native_tests)
     # Mixed personal and focused changes still exercise the shared personal contract.
     if personal and selected:
         selected.update(PERSONAL_TESTS)
@@ -402,10 +389,7 @@ def select_scope(
         "tests_mode": mode,
         "test_files": sorted(selected) if mode == "focused" else [],
         "smoke": smoke,
-        "native": NATIVE.copy() if native_tests else [],
-        "native_mode": "focused" if native_tests else "none",
-        "native_shard_count": 1 if native_tests else 0,
-        "native_tests": native_tests,
+        **native_scope(native_tests),
         "docker": [suite for suite in DOCKER_SUITES if suite in suites],
     }
 
@@ -423,7 +407,7 @@ PERSONAL_TESTS = (
 
 def event_scope(event_name: str, event: dict) -> dict:
     if not isinstance(event, dict) or event_name != "pull_request":
-        # Release pushes and manual checks exercise the whole supported environment.
+        # Manual checks and unexpected non-PR events keep the full supported environment.
         return full_scope()
     try:
         pr = event["pull_request"]

@@ -17,6 +17,32 @@ def jobs():
     return yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))["jobs"]
 
 
+def test_release_is_checked_before_merge_without_duplicate_push_run():
+    # BaseLoader preserves the YAML 1.2 event name "on" instead of treating it as True.
+    workflow = yaml.load(
+        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader
+    )
+    events = workflow["on"]
+    assert set(events) == {"pull_request", "workflow_dispatch"}
+    assert set(events["pull_request"]["branches"]) == {"develop", "main"}
+    assert set(events["pull_request"]["types"]) == {"opened", "synchronize", "reopened", "edited"}
+    assert not {"paths", "paths-ignore"} & events["pull_request"].keys()
+
+
+def test_every_pr_keeps_policy_and_selected_job_validation(jobs):
+    assert "if" not in jobs["checks"]
+    assert set(jobs["final_gate"]["needs"]) == {
+        "scope",
+        "checks",
+        "linux",
+        "compatibility",
+        "docker",
+    }
+    assert "always()" in jobs["final_gate"]["if"]
+    for job in jobs.values():
+        assert not job.get("continue-on-error")
+
+
 @pytest.mark.parametrize("job, mode", [("linux", "tests_mode"), ("compatibility", "native_mode")])
 def test_full_platform_matrix_requires_all_four_shards(jobs, job, mode):
     selected = jobs[job]

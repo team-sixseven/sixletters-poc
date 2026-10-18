@@ -122,7 +122,7 @@ git diff --cached
 ./dev verify
 ```
 
-개인 패키지를 추가했다면 생성·변경된 `Members/yourname/`의 `requirements.in`·`requirements.lock`·`environment.json`도 추가한다. 분리한 실험은 해당 실험 폴더의 파일을 추가한다. 공통 환경만 썼다면 개인 환경 파일을 만들 필요가 없다. `verify`는 변경 범위에 맞게 검사하며, 전체 검사는 `--full`을 붙인다. PR에서는 변경한 기능에 필요한 Linux·Docker 검사를 선택한다. 모든 OS의 전체 검사는 릴리스·수동 실행에서 확인한다. 병합 전 최종 `validate` 성공을 확인한다. [CI 기준](Global/docs/github-setup.md#자동-검사). 검사가 파일을 수정하면 다시 `git add`한다. 통과 후 커밋하고 최신 `develop`을 반영한다. 이 과정은 학습 종료 후 진행한다.
+개인 패키지를 추가했다면 생성·변경된 `Members/yourname/`의 `requirements.in`·`requirements.lock`·`environment.json`도 추가한다. 분리한 실험은 해당 실험 폴더의 파일을 추가한다. 공통 환경만 썼다면 개인 환경 파일을 만들 필요가 없다. `verify`는 변경 범위에 맞게 검사하며, 전체 검사는 `--full`을 붙인다. `develop` PR은 Linux와 필요한 Docker·MLflow 검사를 실행하며, Windows·macOS는 실행 환경 변경에 필요한 항목만 확인한다. 모든 OS의 전체 검사는 `main` 대상 PR과 수동 실행에서 확인한다. 병합 전 최종 `validate` 성공을 확인한다. [CI 기준](Global/docs/github-setup.md#자동-검사). 검사가 파일을 수정하면 다시 `git add`한다. 통과 후 커밋하고 최신 `develop`을 반영한다. 이 과정은 학습 종료 후 진행한다.
 
 ```sh
 git commit -m "experiment: 임상 데이터 기본 모델 비교"

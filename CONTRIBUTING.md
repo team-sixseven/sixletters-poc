@@ -66,7 +66,7 @@ git commit -m "experiment: 임상 데이터 기본 모델 비교"
 | 검토 의견 | 수정 요청·검토 의견 처리 완료 |
 | 작업 상태 | `[WIP]` 제거·병합 충돌 없음 |
 
-Free 비공개 저장소에서는 조건이 강제되지 않으므로 직접 확인한다. 변경한 공통 기능의 Docker 검사도 병합 조건에 포함된다. 병렬 검사의 일부만 끝났다면 최종 `validate`를 기다린다. 검사 미실행은 성공이 아니다. [CI 실행 기준](Global/docs/github-setup.md#자동-검사)
+Free 비공개 저장소에서는 조건이 강제되지 않으므로 직접 확인한다. `develop` PR은 Linux와 필요한 Docker·MLflow 검사를 실행하고, Windows·macOS는 실행 환경 변경에 필요한 항목만 확인한다. 병렬 검사의 일부만 끝났다면 최종 `validate`를 기다린다. 검사 미실행은 성공이 아니다. [CI 실행 기준](Global/docs/github-setup.md#자동-검사)
 
 **실험 리뷰에서 확인할 것:**
 
@@ -121,4 +121,4 @@ git merge origin/develop
 
 ## 제출 버전을 main에 반영할 때
 
-통합된 코드·같은 환경에서 검증 결과를 확인하고 [최종 평가](Global/docs/final-evaluation.md)로 후보·임계값을 고정한 뒤 테스트한다. 테스트 결과로 후보를 다시 고르거나 설정을 개선하지 않는다. [필수 비교·제출 자료](Global/docs/parallel-work.md#6-공유하고-제출-후보-선택하기)를 확인한다. **base가 `main`, compare가 `develop`인 릴리스 PR**에 같은 병합 조건을 적용하고 merge commit으로 병합한다. `develop`은 삭제하지 않는다.
+통합된 코드·같은 환경에서 검증 결과를 확인하고 [최종 평가](Global/docs/final-evaluation.md)로 후보·임계값을 고정한 뒤 테스트한다. 테스트 결과로 후보를 다시 고르거나 설정을 개선하지 않는다. [필수 비교·제출 자료](Global/docs/parallel-work.md#6-공유하고-제출-후보-선택하기)를 확인한다. **base가 `main`, compare가 `develop`인 릴리스 PR**에서 최신 `main`을 반영한 병합 결과의 모든 OS·Docker 전체 검사와 `validate` 성공을 확인한다. 동료 검토 등 같은 병합 조건을 적용하고 merge commit으로 병합한다. 병합 후에는 같은 검사를 반복하지 않는다. `develop`은 삭제하지 않는다.
