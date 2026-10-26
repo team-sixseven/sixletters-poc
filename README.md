@@ -49,11 +49,21 @@ mkdir -p Members/alice/experiments/exp001
 ./dev exec Members/alice/experiments/exp001 train.py
 # 빈 노트북 생성 + 개인 환경 커널 연결
 ./dev notebook Members/alice/notebooks
-# 필요할 때만 추가 패키지 설치
+```
+
+### 필요한 패키지 추가하기
+
+pandas처럼 기본으로 제공되는 패키지는 바로 쓰면 됩니다. XGBoost가 추가로 필요하면 아래 명령을 실행하세요. `alice`는 본인 ID로 바꿉니다.
+
+```bash
 ./dev env add Members/alice xgboost
 ```
 
-추가 패키지가 없으면 공통 환경을 그대로 사용합니다. 개인 패키지는 이름 폴더에서 공유하며, 필요한 작업 폴더만 `./dev env isolate Members/alice/experiments/exp001`로 분리할 수 있습니다. [개인 환경 사용법](Global/docs/development.md)
+내 컴퓨터의 개인 환경에 설치되며, 같은 이름 폴더 아래의 여러 실험에서 사용할 수 있습니다. 다른 팀원의 설치 환경은 바뀌지 않습니다. 노트북을 열어둔 경우 커널을 종료한 뒤 설치하고 다시 시작하세요.
+
+설치하면 **다른 사람도 같은 패키지를 준비할 수 있도록 설치 목록이 함께 기록됩니다.** 직접 작성할 필요는 없습니다. 코드를 공유할 때 변경된 설치 목록도 함께 커밋하세요. 실제 설치 폴더·데이터·모델·비밀번호는 올리지 않습니다.
+
+[설치 목록 공유·다른 팀원 코드 실행 방법](CONTRIBUTING.md#패키지-설치와-공유) · [특정 실험만 다른 패키지를 쓰는 방법](Global/docs/development.md#개인-패키지)
 
 **Jupyter의 새 터미널에서는 `./dev` 대신 `dev`를 사용합니다.** 작업 폴더 안으로 이동했다면 경로도 현재 위치에 맞춰 입력하세요. 명령은 저장소 루트에서 실행하는 것이 가장 간단합니다.
 
