@@ -88,8 +88,9 @@ def _directory(path: Path) -> Path:
 
 
 def _member_directory(path: Path) -> Path | None:
-    if path.parent.name == "experiments" and path.parent.parent.parent.name == "Members":
-        return path.parent.parent
+    for candidate in (path, *path.parents):
+        if candidate.parent.name == "Members":
+            return candidate
     return None
 
 
@@ -118,7 +119,7 @@ def environment_directory(experiment_dir: Path) -> Path:
             raise ValueError('environment.toml must contain only scope = "shared" or "isolated"')
         scope = value["scope"]
     if scope == "shared" and owner is None:
-        raise ValueError("Shared environments require Members/<owner>/experiments/<name>")
+        raise ValueError("Shared environments require Members/<owner>/<work-directory>")
     if scope == "isolated" or owner is None:
         return path
     if scope is None:
@@ -170,9 +171,7 @@ def _check_environment(path: Path) -> None:
 
 def _experiment(path: Path) -> Path:
     path = _directory(path)
-    if not (path / "config.toml").is_file():
-        raise ValueError("Select an existing experiment directory containing config.toml")
-    for name in ("config.toml", ".poc-execution.lock"):
+    for name in (".poc-execution.lock",):
         if (path / name).is_symlink():
             raise ValueError(f"Experiment {name} must not be a symbolic link")
     _check_environment(environment_directory(path))
@@ -767,10 +766,11 @@ def command_prefix() -> list[str]:
 
 def _env_command(experiment: Path, action: str, *options: str) -> str:
     command = command_prefix()
-    command.extend(["env", action, experiment.name])
-    owner = _member_directory(experiment)
-    if owner is not None:
-        command.extend(["--owner", owner.name])
+    try:
+        location = experiment.relative_to(project_root(experiment)).as_posix()
+    except ValueError:
+        location = experiment.as_posix()
+    command.extend(["env", action, location])
     return shlex.join([*command, *options])
 
 
@@ -1164,7 +1164,7 @@ def env_share(experiment_dir: Path) -> Path:
     experiment = _experiment(experiment_dir)
     owner = _member_directory(experiment)
     if owner is None:
-        raise ValueError("Shared environments require Members/<owner>/experiments/<name>")
+        raise ValueError("Shared environments require Members/<owner>/<work-directory>")
     with _experiment_locked(experiment):
         active = environment_directory(experiment)
         with _locked(owner):
@@ -1203,9 +1203,6 @@ def execute_script(experiment_dir: Path, script: Path, args: list[str]) -> int:
         environment["PYTHONPATH"] = sources + (
             os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else ""
         )
-        from .execution import ENVIRONMENT_KEY, invocation
-
-        environment[ENVIRONMENT_KEY] = json.dumps(invocation(path, script, args))
         return subprocess.run(
             [str(python), str(script), *args], cwd=root, env=environment, check=False
         ).returncode
@@ -1247,17 +1244,21 @@ def _kernel_spec_path(experiment: Path) -> Path:
 
 def _refresh_scope_kernels(active: Path, python: Path) -> None:
     """Update only existing registrations after installation, under the environment gate."""
+    experiments = [active]
     if active.parent.name == "Members":
-        directory = active / "experiments"
-        experiments = sorted(directory.iterdir()) if directory.is_dir() else []
-    else:
-        experiments = [active]
-    for experiment in experiments:
-        if (
-            _member_directory(experiment) is None
-            or experiment.is_symlink()
-            or not (experiment / "config.toml").is_file()
-        ):
+        registry = jupyter_data_path(project_root(active)) / "kernels"
+        for file in registry.glob("*/kernel.json"):
+            if file.is_symlink():
+                continue
+            try:
+                argv = json.loads(file.read_text(encoding="utf-8"))["argv"]
+                candidate = Path(argv[argv.index("--kernel") + 1])
+                if candidate.is_relative_to(active) and candidate.is_dir():
+                    experiments.append(candidate)
+            except (OSError, ValueError, KeyError, IndexError, TypeError):
+                continue
+    for experiment in set(experiments):
+        if _member_directory(experiment) is None or experiment.is_symlink():
             continue
         try:
             selected = environment_directory(experiment)
@@ -1296,12 +1297,8 @@ def env_kernel(experiment_dir: Path, *, relock: bool = False) -> tuple[str, Path
     path = _experiment(experiment_dir)
     root = project_root(path)
     relative = path.relative_to(root)
-    if (
-        len(relative.parts) != 4
-        or relative.parts[0] != "Members"
-        or relative.parts[2] != "experiments"
-    ):
-        raise ValueError("Notebook kernels require a Members/<owner>/experiments/<name> folder")
+    if len(relative.parts) < 2 or relative.parts[0] != "Members":
+        raise ValueError("Notebook kernels require a Members/<owner>/<work-directory> folder")
     if not relock:
         active = environment_directory(path)
         with _locked(active):
@@ -1334,7 +1331,7 @@ def env_kernel(experiment_dir: Path, *, relock: bool = False) -> tuple[str, Path
                             "--runtime-prefix",
                             str(_runtime_prefix(active, python)),
                         ],
-                        "display_name": f"SixSeven · {relative.parts[1]} / {relative.parts[3]}",
+                        "display_name": f"SixSeven · {relative.parts[1]} / {relative.name}",
                         "language": "python",
                         "env": {"PYTHONPATH": str(root / "Global/src")},
                     }
@@ -1355,7 +1352,7 @@ def env_kernel(experiment_dir: Path, *, relock: bool = False) -> tuple[str, Path
 def _write_kernel_spec(path: Path, python: Path) -> tuple[str, Path]:
     root = project_root(path)
     relative = path.relative_to(root)
-    display = f"SixSeven · {relative.parts[1]} / {relative.parts[3]}"
+    display = f"SixSeven · {relative.parts[1]} / {relative.name}"
     directory = _kernel_spec_path(path).parent
     if any(part.is_symlink() for part in (directory, *directory.parents)):
         raise ValueError("Jupyter kernel cache must not contain symbolic links")
@@ -1451,9 +1448,8 @@ def _kernel_lease(active: Path, experiment: Path | None = None) -> FileLock:
 def _start_kernel(path: Path, active: Path, connection_file: Path) -> None:
     root = project_root(path)
     # Notebook cells are interactive, not a previous script invocation from the server.
-    from .execution import ENVIRONMENT_KEY
 
-    os.environ.pop(ENVIRONMENT_KEY, None)
+    os.environ.pop("SIXLETTERS_EXECUTION_JSON", None)
     os.environ.pop("PYTHONHOME", None)
     _set_runtime_environment(os.environ, active, Path(sys.executable))
     os.environ["PYTHONPATH"] = str(root / "Global/src")

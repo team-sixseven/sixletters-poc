@@ -14,7 +14,8 @@ from jupyter_client.kernelspec import KernelSpecManager
 from packaging.requirements import Requirement
 
 from sixletters import personal_env as pe
-from sixletters.execution import ENVIRONMENT_KEY
+
+ENVIRONMENT_KEY = "SIXLETTERS_EXECUTION_JSON"
 
 
 def _copy_kernel_dependencies(site: Path) -> None:

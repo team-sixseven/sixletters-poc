@@ -64,3 +64,8 @@ Global/artifacts/**
 # Apply the same rule before legacy experiments are migrated.
 /experiments/*/*/**/[oO][uU][tT][pP][uU][tT][sS]/
 /experiments/*/*/**/[mM][oO][dD][eE][lL][sS]/**/*.[jJ][sS][oO][nN]
+
+# Personal generated results and models
+/Members/*/**/[rR][eE][sS][uU][lL][tT][sS]/
+/Members/*/**/[oO][uU][tT][pP][uU][tT][sS]/
+/Members/*/**/[mM][oO][dD][eE][lL][sS]/**/*.[jJ][sS][oO][nN]

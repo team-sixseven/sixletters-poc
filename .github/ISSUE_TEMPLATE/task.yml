@@ -11,7 +11,7 @@ body:
     id: done
     attributes:
       label: 완료 기준
-      description: 어떤 결과를 확인하면 완료인지 적어주세요. 개인 실험은 비교할 방법과 입력 그룹을 적어주세요.
+      description: 어떤 결과를 확인하면 완료인지 적어주세요. 개인 작업은 확인할 결과와 공유 방법을 적어주세요.
     validations:
       required: true
   - type: textarea

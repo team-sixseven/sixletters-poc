@@ -1,6 +1,6 @@
 """Check Docker test checkout isolation without starting or requiring Docker."""
 
-from test_docker_workflow import copy_workspace
+from docker_support import copy_workspace
 
 
 def test_workspace_copy_excludes_existing_results_and_keeps_execution_files(tmp_path):
@@ -14,7 +14,6 @@ def test_workspace_copy_excludes_existing_results_and_keeps_execution_files(tmp_
         "Global/uv.lock": "version = 1\n",
         "Global/src/sixletters/__main__.py": "# shared commands\n",
         "Global/scripts/start_workspace.py": "# workspace startup\n",
-        "Global/templates/experiment/train.py": "# experiment example\n",
         "Global/notebooks/00_environment_check.ipynb": '{"cells": []}\n',
         "Members/README.md": "# Personal workspace\n",
     }

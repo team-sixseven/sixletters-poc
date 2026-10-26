@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from sixletters import experiment, personal_env
+from sixletters import personal_env
 
 
 def test_publication_keeps_manifest_hashes_valid_with_windows_text_newlines(tmp_path, monkeypatch):
@@ -40,4 +40,3 @@ def test_publication_keeps_manifest_hashes_valid_with_windows_text_newlines(tmp_
         (personal_env.LOCK_FILE, "lock_sha256"),
     ):
         assert hashlib.sha256(resources[name]).hexdigest() == manifest[digest]
-    experiment._validate_environment_runtime(resources, {"packages": baseline["packages"]})
