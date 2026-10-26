@@ -60,11 +60,27 @@ def main() -> int:
                     settings[key] = value
             if args.password:
                 settings["password"] = getpass.getpass("MLflow 비밀번호: ")
+            folders = [
+                root / "Members" / owner / name
+                for name in ("notebooks", "experiments", "results", "models")
+            ] + [
+                root / "Global/data/DATA" / name
+                for name in (
+                    "clinical/split",
+                    "ECG_num/split",
+                    "ECG_tem/split",
+                    "ECG_tem/ECG_tem_clean",
+                )
+            ]
+            for folder in folders:
+                for path in (folder, *folder.parents):
+                    if path == root:
+                        break
+                    if path.is_symlink() or (path.exists() and not path.is_dir()):
+                        raise ValueError(f"일반 폴더가 필요합니다: {path.relative_to(root)}")
+            for folder in folders:
+                folder.mkdir(parents=True, exist_ok=True)
             write_settings(root, settings)
-            member = root / "Members" / owner
-            if member.is_symlink():
-                raise ValueError("개인 폴더는 심볼릭 링크일 수 없습니다.")
-            member.mkdir(parents=True, exist_ok=True)
             print(f"개인 설정 저장: Members/{owner} (접속 정보는 Git에 포함하지 않습니다)")
         elif args.command == "upload":
             from .upload import upload

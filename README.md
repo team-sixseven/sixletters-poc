@@ -21,21 +21,39 @@ cd sixletters-poc
 ./dev check --gpu
 ```
 
-## 2. 개인 작업
+## 2. 데이터와 개인 작업
+
+`setup`이 아래 빈 폴더를 준비합니다. 기존 파일은 덮어쓰거나 옮기지 않습니다. 기존 사용자도 `./dev setup --owner alice`를 다시 실행하면 됩니다.
+
+```text
+Global/data/DATA/                  # Drive의 DATA 폴더 내용 그대로
+├── clinical/                     # clinical_clean.csv + split/{train,val,test}.csv
+├── ECG_num/                      # ECG_clean.csv + split/{train,val,test}.csv
+└── ECG_tem/                      # ECG_tem_clean.csv + ECG_tem_clean/ + split/
+Members/alice/
+├── notebooks/                    # 분석 노트북
+├── experiments/                  # 개인 학습 코드·설정
+├── results/                      # MLflow 등록 결과
+└── models/                       # 학습한 모델 파일
+```
+
+Drive에서 받은 `DATA`를 **`Global/data/` 아래**에 넣으세요. `DATA/DATA`로 중첩하지 않습니다. ZIP으로 받았다면 먼저 압축을 풉니다. 데이터·결과·모델 파일은 Git에서 제외됩니다. [데이터 파일과 경로 안내](Global/data/README.md)
+
+데이터는 각자 컴퓨터에 보관하며 Docker와 Jupyter에서도 같은 저장소 파일을 읽습니다. 다운로드·전처리·분할을 자동 실행하지 않습니다.
 
 `Members/alice/` 아래 원하는 폴더에 코드와 노트북을 작성하세요. 파일명·모델·설정 형식은 자유입니다.
 
 ```bash
-mkdir -p Members/alice/work
-# work에 직접 작성한 train.py 실행
-./dev exec Members/alice/work train.py
+mkdir -p Members/alice/experiments/exp001
+# exp001에 직접 작성한 train.py 실행
+./dev exec Members/alice/experiments/exp001 train.py
 # 빈 노트북 생성 + 개인 환경 커널 연결
-./dev notebook Members/alice/work
+./dev notebook Members/alice/notebooks
 # 필요할 때만 추가 패키지 설치
 ./dev env add Members/alice xgboost
 ```
 
-추가 패키지가 없으면 공통 환경을 그대로 사용합니다. 개인 패키지는 이름 폴더에서 공유하며, 필요한 작업 폴더만 `./dev env isolate Members/alice/work`로 분리할 수 있습니다. [개인 환경 사용법](Global/docs/development.md)
+추가 패키지가 없으면 공통 환경을 그대로 사용합니다. 개인 패키지는 이름 폴더에서 공유하며, 필요한 작업 폴더만 `./dev env isolate Members/alice/experiments/exp001`로 분리할 수 있습니다. [개인 환경 사용법](Global/docs/development.md)
 
 **Jupyter의 새 터미널에서는 `./dev` 대신 `dev`를 사용합니다.** 작업 폴더 안으로 이동했다면 경로도 현재 위치에 맞춰 입력하세요. 명령은 저장소 루트에서 실행하는 것이 가장 간단합니다.
 
