@@ -1,0 +1,9 @@
+# Loaded by model/ML/models.py.
+iterations: 100
+depth: 4
+learning_rate: 0.05
+random_seed: 42
+verbose: false
+thread_count: 1
+allow_writing_files: false
+# Loaded by model/ML/models.py.

@@ -1,0 +1,39 @@
+contract: sixletters-model-handoff
+contract_version: 2
+upload_mode: explicit_mlflow_import
+run_granularity: one_model_per_run
+selection:
+  metric: validation_average_precision
+  test_used_for_selection: false
+metric_name_mapping:
+  auroc: roc_auc
+  auprc_average_precision: average_precision
+  brier: brier_score
+inputs:
+  clinical: clinical
+  holter_raw: holter_raw_waveform
+  holter_segment_features: holter_segment_statistics
+required_run_files:
+  - run.json
+  - validation_predictions.csv
+  - models/
+optional_run_files:
+  - test_metrics_in_run_json_for_selected_model_only
+  - test_predictions.csv_for_selected_model_only
+patient_prediction_columns:
+  - patient_id
+  - target
+  - score
+never_upload:
+  - source datasets
+  - raw ECG waveforms
+  - split CSV files
+  - credentials
+  - patient-level data as MLflow params or tags
+proposed_tags:
+  handoff_contract: sixletters-model-handoff
+  handoff_bundle_sha256: bundle content hash
+  sang_owner: owner label
+  sang_dataset: dataset identifier from manifest.json
+  sang_input_group: run.json input_group
+  sang_model: run.json model

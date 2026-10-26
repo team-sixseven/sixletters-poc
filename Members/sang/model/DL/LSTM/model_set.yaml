@@ -1,0 +1,14 @@
+models:
+  Attention LSTM FCN:
+    implementation: Members/sang/model/DL/models.py::AttentionLSTMFCN
+    input: [batch, 8, 3, 2000]
+    output: [batch, 1]
+    sequence_order: chronological
+    parameters: {channels: 3, hidden_dim: 32}
+  BiLSTM:
+    implementation: Members/sang/model/DL/models.py::BiLSTMECG
+    input: [batch, 8, 3, 2000]
+    output: [batch, 1]
+    sequence_order: chronological
+    parameters: {channels: 3, hidden_dim: 32, layers: 1}
+# Model architecture settings are loaded by evaluate_ecg_architectures.py.

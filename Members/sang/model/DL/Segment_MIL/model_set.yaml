@@ -1,0 +1,11 @@
+models:
+  Segment Attention MIL:
+    implementation: Members/sang/model/DL/models.py::SegmentAttentionMIL
+    input: [batch, 8, 16]
+    output: [batch, 1]
+    parameters: {input_features: 16, hidden_dim: 32}
+  MIL-TCN:
+    implementation: Members/sang/model/DL/models.py::MILTCN
+    input: [batch, 8, 16]
+    output: [batch, 1]
+    parameters: {input_features: 16, hidden_dim: 32}

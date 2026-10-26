@@ -1,0 +1,6 @@
+# Additional packages for SCD model smoke checks; install with `./dev env add`.
+xgboost
+catboost
+scipy
+seaborn
+shap

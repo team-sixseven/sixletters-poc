@@ -1,0 +1,20 @@
+metrics:
+  ranking:
+    - auroc
+    - auprc_average_precision
+  probability_quality:
+    - brier
+  threshold_dependent:
+    - sensitivity
+    - specificity
+threshold_policy:
+  clinical:
+    mode: youden_j_on_validation
+    tie_break: higher_sensitivity_then_lower_threshold
+  holter:
+    mode: youden_j_on_validation
+    tie_break: higher_sensitivity_then_lower_threshold
+validation_test_patient_overlap: forbidden
+test_used_for_threshold_selection: false
+calibration_curve: not_implemented
+survival_or_censoring_metrics: not_applicable_to_current_binary_label

@@ -1,0 +1,13 @@
+models:
+  ECG Transformer:
+    implementation: Members/sang/model/DL/models.py::ECGTransformer
+    input: [batch, 8, 3, 2000]
+    output: [batch, 1]
+    internal_input_per_segment: [batch, 3, 2000]
+    parameters: {channels: 3, patch_size: 50, embed_dim: 32, heads: 4, layers: 2, feedforward_dim: 64}
+  CNN+Transformer:
+    implementation: Members/sang/model/DL/models.py::CNNTST
+    input: [batch, 8, 3, 2000]
+    output: [batch, 1]
+    parameters: {channels: 3, hidden_dim: 32, heads: 4, layers: 2, feedforward_dim: 64, dropout: 0.0}
+# Model architecture settings are loaded by evaluate_ecg_architectures.py.

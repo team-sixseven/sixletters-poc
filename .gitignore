@@ -32,6 +32,13 @@ Thumbs.db
 *.key
 
 # Patient-level data, split manifests and trained models stay local.
+/Members/*/datas/
+/Members/*/split_datas/
+/Members/*/results/
+/Members/*/model/outputs/
+# Patient IDs and cohort assignments in local ECG pilot manifests/results.
+/Members/*/docs/ecg_*_download_manifest.json
+/Members/*/docs/ecg_*_model_comparison.json
 Global/data/**
 !Global/data/README.md
 Global/artifacts/**

@@ -1,0 +1,49 @@
+# SCD 모델 실험 구조
+
+이 디렉터리는 실험 진입점과 모델 설정을 데이터 종류별로 정리합니다. 기존 학습·평가 구현과 데이터는 복제하지 않습니다.
+
+```text
+model/
+├── ECG+clinical_experiment.ipynb
+├── ML/
+│   ├── dataloader/       # clinical_clean.csv와 split ID loader
+│   ├── data/             # 데이터 복사본 없이 안내 파일만 보관
+│   ├── models.py         # 임상 3개 후보 팩토리와 공통 전처리
+│   ├── model_experiment_only_ML.ipynb
+│   ├── model_choice.yaml
+│   └── {Logistic_Regression,xgboost,catboost}/
+├── DL/
+│   ├── dataloader/
+│   ├── data/
+│   ├── model_experiment_only_DL.ipynb
+│   ├── model_choice.yaml
+│   ├── training.yaml
+│   ├── CNN/
+│   ├── LSTM/
+│   ├── Transformer/
+│   └── Segment_MIL/      # 환자 구간 통계 기반 attention/TCN MIL
+├── evaluation/
+│   ├── evaluation_experiment.ipynb
+│   ├── ML/                 # clinical 평가 및 결과 재계산
+│   ├── DL/                 # Holter 평가 및 validation threshold 선택
+│   ├── evaluate_predictions.py
+│   └── evaluation_choice.yaml
+└── tracking/
+    ├── bundle.py
+    ├── import_bundle_to_mlflow.py
+    ├── handoff.yaml
+    └── MLFLOW_HANDOFF.md
+```
+
+## 실행 기준
+
+- 임상 모델의 실제 구현은 `../scripts/evaluate_preprocessed_clinical.py`이며 사진에 지정된 Logistic Regression, XGBoost, CatBoost를 같은 환자 분할에서 비교합니다.
+- 임상 feature 입력은 `../datas/clincal/clinical_clean.csv`, split membership은 `../datas/clincal/splits/{train,val,test}.csv`입니다. 모델 팩토리는 `ML/models.py`, loader는 `ML/dataloader/clinical.py`, 비교 runner는 `../scripts/evaluate_preprocessed_clinical.py`입니다.
+- Holter 모델의 실제 구현은 `../scripts/evaluate_ecg_architectures.py`, 모델 정의는 `DL/models.py`입니다. 파형 입력은 `../datas/Holter/windows/Pxxxx.npy` 환자별 파일입니다.
+- NPY windows loader는 `DL/dataloader/holter_windows.py`입니다. `(N_windows,3,2000)`에서 환자별 8개 window를 기록 전체에 균등하게 골라 `(N,8,3,2000)`으로 구성합니다.
+- `ML/models.py`와 `DL/models.py`가 공통 전처리와 네트워크 구현을 보유합니다. 평가 스크립트는 `model_choice.yaml`, 모델별 `parameter.yaml`·`model_set.yaml`·`transformer.yaml`을 읽어 후보 목록, 데이터 경로, 학습값과 architecture 설정을 적용합니다. 모델별 하위 Python 파일은 공통 구현을 노출하는 entry point입니다.
+- 두 평가 스크립트는 `evaluation/ML/clinical.py`, `evaluation/DL/holter.py`의 metric 함수를 사용합니다. 저장된 prediction만 다시 평가하는 방법은 [evaluation README](evaluation/README.md)에 있습니다.
+- `ML/data`와 `DL/data`는 데이터 복사본이 아닙니다. 원본은 각각 `../datas/clincal/clinical_clean.csv`와 `../datas/Holter/windows/`입니다.
+- 실험 노트북은 공통 평가 스크립트를 호출하는 실행 진입점입니다. 실제 결과는 스크립트가 `report.md`와 `results.json`으로 저장합니다. 명령은 저장소 루트에서 실행합니다.
+- MLflow 담당자는 로컬 handoff bundle을 검사하고 MLflow run으로 등록하는 [importer 사용법](tracking/MLFLOW_HANDOFF.md)을 참고하세요.
+- 평가 스크립트의 `--tracking-output`은 실행할 때마다 모델별 번들을 새 폴더에 저장합니다. 로컬 추적 준비물은 `.gitignore`에서 제외되며, 자동 MLflow 업로드는 하지 않습니다.
