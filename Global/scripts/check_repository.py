@@ -176,9 +176,15 @@ def violations(path: Path, content: bytes) -> list[str]:
     elif path.name == ".env" or path.name.startswith(".env."):
         problems.append("environment secrets must not be tracked")
     if path.name == ".poc.local.toml":
-        problems.append("local owner and data paths must not be tracked")
+        problems.append("local owner and connection settings must not be tracked")
     if path.parts[0] == ".poc-cache":
         problems.append("local tool caches must not be tracked")
+    personal_dirs = {part.casefold() for part in path.parts[2:-1]}
+    if path.parts[0] == "Members" and (
+        personal_dirs & {"results", "outputs"}
+        or ("models" in personal_dirs and path.suffix.lower() == ".json")
+    ):
+        problems.append("personal results/models must not be tracked")
     experiment_directories = {part.casefold() for part in experiment_relative_parts(path)[:-1]}
     if "outputs" in experiment_directories:
         problems.append("generated experiment outputs must not be tracked")

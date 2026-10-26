@@ -25,39 +25,21 @@ case "$command" in
         cat <<'HELP'
 사용법: ./dev <작업> [--gpu] [인자]
 
-  up -d --wait       이미지·환경 점검 후 백그라운드에서 Jupyter 시작
-  down               작업 공간 종료 (코드·데이터·결과는 유지)
-  build              공통 이미지만 준비 또는 갱신
-  check              Python·CSV·평가·ECG 점검 (GPU 선택 시 CUDA 연산까지)
-  shell              Python을 실행할 컨테이너 터미널 열기
-  status             환경·이름·데이터·전송 상태와 다음 작업 확인
-  url                실행 중인 Jupyter의 개인 접속 주소·토큰 확인
-  notebook <실험명>  노트북 생성·패키지 준비·커널 연결 (이름 생략 시 up과 동일)
-  verify             변경 범위에 맞는 검사 (--full: 전체, --staged: 커밋할 파일)
-  test               테스트 실행 (pytest 인자 추가 가능)
-  lint [--staged]     전체 또는 커밋할 파일 검사
-  hooks              커밋 전 자동 검사 연결
-  deps <작업>        패키지 add/remove/lock/export (설정 변경 후에도 실행 가능)
-  init               이름과 공통 데이터 위치 저장
-  new <실험명>       개인 예제 생성 (--from 원본실험: 코드·설정 복제)
-  baselines [접두사] LR·RF × 임상·ECG·결합 개인 실험 6개 생성 (학습은 exec)
-  env <작업> <실험명> 개인 패키지 add/remove/sync, kernel, 전용 환경 isolate, 공통 복귀 share, 상태 status
-  exec <실험명> <파일명.py> [인자]  선택한 개인 환경에서 Python 파일 실행
-  practice           개인 MUSIC 데이터·모델·평가지표 실습 노트북 생성
-  demo               합성 예제 데이터 생성
-  music              MUSIC 다운로드·정답·컬럼 정리·공통 환자 분할
-  sync               아직 전송하지 못한 결과를 공용 MLflow 서버에 재전송
-  archive            선택한 실험의 모델·재현 파일을 추가 업로드
-  restore <새실험명> 목록에서 복원할 결과 선택 (--remote: 서버의 보관 완료 결과)
-  final freeze <이름> 최종 후보·임계값 확정 후 모델 사본 보관
-  final report <이름> 확정 후보의 시험 예측으로 최종 표·그래프 생성
-  final status <이름> 최종 후보별 완료 상태·남은 명령 확인
-  compare [--remote] 로컬 또는 공용 서버에서 비교할 실험 결과 선택
-  tracking <작업>    공용 서버 up/down/logs/status/user (서버 운영 장비에서)
+  up -d --wait        Docker 환경 준비·Jupyter 시작 (--gpu: NVIDIA GPU)
+  down / build       종료 / 이미지 갱신
+  check / status     기본 패키지 점검 / 현재 설정
+  url / shell        Jupyter 주소 / 컨테이너 터미널
+  setup              개인 ID 설정 (--uri 서버주소 --username 계정 --password)
+  upload <결과폴더>   지표·설정·파일 등록 (--model 모델파일또는폴더)
+  exec <작업폴더> <파일.py> [인자]  개인 환경에서 실행
+  notebook <작업폴더> 노트북 생성·개인 패키지 커널 연결
+  env <작업> <폴더>   add/remove/sync/status/kernel/isolate/share
+  deps <작업>        공통 패키지 add/remove/lock/export
+  verify / test / lint / hooks  검사 / 테스트 / 코드 정리 / 커밋 전 검사
+  tracking <작업>    공용 서버 up/down/logs/status/user
 
-학습: ./dev exec exp001 train.py 또는 ./dev shell 안에서 dev exec exp001 train.py
-GPU: ./dev up --gpu -d --wait
-프로젝트 명령 도움말: ./dev <명령> --help
+컨테이너와 Jupyter 터미널에서는 dev 명령을 사용합니다.
+상세 도움말: ./dev <명령> --help
 HELP
         exit 0
         ;;
@@ -85,7 +67,7 @@ fi
 
 if [ "$command" = tracking ]; then
     if [ ! -f "$repo_dir/.env.tracking" ]; then
-        echo '.env.tracking.example을 .env.tracking으로 복사하고 서버 설정을 입력하세요. Global/docs/tracking.md를 확인하세요.' >&2
+        echo '.env.tracking.example을 .env.tracking으로 복사하고 서버 설정을 입력하세요. Global/docs/tracking-server.md를 확인하세요.' >&2
         exit 2
     fi
     tracking_compose() {

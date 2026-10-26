@@ -1,84 +1,80 @@
-"""Local convenience settings; these never select or execute a training method."""
+"""Private, checkout-local owner and tracking connection settings."""
 
 import json
+import os
+import re
+import tempfile
 import tomllib
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from .workspace import validate_component
-
-SETTINGS_FILE = ".poc.local.toml"
+SETTINGS = ".poc.local.toml"
 
 
 def project_root(start: Path | None = None) -> Path:
-    """Find the checkout even when an IDE starts a script in its own folder."""
-    start = (start or Path.cwd()).resolve()
-    for candidate in (start, *start.parents):
-        if (candidate / "Global/pyproject.toml").is_file() or (
-            (candidate / "pyproject.toml").is_file() and (candidate / "experiments").is_dir()
-        ):
+    path = (start or Path.cwd()).resolve()
+    for candidate in (path, *path.parents):
+        if (candidate / "Global/pyproject.toml").is_file():
             return candidate
-    return Path(__file__).resolve().parents[3]
+    raise ValueError("저장소 안에서 실행하세요.")
 
 
-def resolve_workspace_path(root: Path, path: Path) -> Path:
-    """Resolve former shared paths without changing arbitrary custom locations."""
-    root = Path(root).resolve()
-    path = Path(path)
-    absolute = (path if path.is_absolute() else root / path).resolve()
-    if not (root / "Global/pyproject.toml").is_file():
-        return absolute
-    try:
-        relative = absolute.relative_to(root)
-    except ValueError:
-        return absolute
-    if relative.parts and relative.parts[0] in {"data", "artifacts"}:
-        destination = root / "Global" / relative
-        if absolute.exists():
-            raise ValueError(
-                "Legacy data/results remain at the repository root. Run "
-                "python Global/scripts/migrate_layout.py before continuing."
-            )
-        return destination
-    return absolute
+def read_settings(root: Path) -> dict:
+    file = root / SETTINGS
+    if file.is_symlink():
+        raise ValueError("설정 파일은 심볼릭 링크일 수 없습니다.")
+    return tomllib.loads(file.read_text(encoding="utf-8")) if file.exists() else {}
 
 
-def read_settings(root: Path) -> dict[str, str]:
-    path = root / SETTINGS_FILE
-    if not path.exists():
-        return {}
-    settings = tomllib.loads(path.read_text(encoding="utf-8"))
-    if set(settings) != {"owner", "data"} or any(
-        not isinstance(value, str) or not value.strip() for value in settings.values()
-    ):
-        raise ValueError(f"Invalid {SETTINGS_FILE}; use dev init to register owner and data")
-    settings["owner"] = validate_component(settings["owner"], "owner")
-    settings["data"] = _relative_data(root, Path(settings["data"]))
-    return settings
+def validate_owner(owner: str) -> str:
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,39}", owner):
+        raise ValueError("이름은 영문 소문자로 시작하는 1~40자의 영문·숫자·_·- ID를 사용하세요.")
+    return owner
 
 
-def _relative_data(root: Path, data: Path) -> str:
-    resolved = resolve_workspace_path(root, data).resolve()
-    if not resolved.is_relative_to(root.resolve()) or resolved == root.resolve():
-        raise ValueError("The configured data path must be inside this repository")
-    return resolved.relative_to(root.resolve()).as_posix()
-
-
-def write_settings(root: Path, owner: str, data: Path) -> Path:
-    owner = validate_component(owner, "owner")
-    relative = _relative_data(root, data)
-    path = root / SETTINGS_FILE
-    if path.is_symlink():
-        raise ValueError(f"{SETTINGS_FILE} must not be a symbolic link")
-    path.write_text(
-        f"owner = {json.dumps(owner, ensure_ascii=False)}\n"
-        f"data = {json.dumps(relative, ensure_ascii=False)}\n",
-        encoding="utf-8",
-    )
-    return path
-
-
-def configured_data(root: Path) -> Path:
+def connection(root: Path) -> dict[str, str]:
     settings = read_settings(root)
-    if "data" not in settings:
-        raise ValueError("Specify --data or register a data path with dev init first")
-    return root / settings["data"]
+    result = {
+        key: (os.environ.get(env) or settings.get(key, ""))
+        for key, env in {
+            "uri": "MLFLOW_TRACKING_URI",
+            "username": "MLFLOW_TRACKING_USERNAME",
+            "password": "MLFLOW_TRACKING_PASSWORD",
+            "experiment": "MLFLOW_EXPERIMENT_NAME",
+        }.items()
+    }
+    result["experiment"] = result["experiment"] or "sixseven-poc"
+    parsed = urlsplit(result["uri"])
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(
+            "dev setup에서 http(s) 서버 주소를 설정하세요. 주소에 계정·비밀번호를 넣지 마세요."
+        )
+    return result
+
+
+def write_settings(root: Path, values: dict[str, str]) -> Path:
+    validate_owner(values["owner"])
+    destination = root / SETTINGS
+    if destination.is_symlink():
+        raise ValueError("설정 파일은 심볼릭 링크일 수 없습니다.")
+    fd, temporary = tempfile.mkstemp(prefix=".settings-", dir=root)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(
+                "\n".join(
+                    f"{key} = {json.dumps(value, ensure_ascii=False)}"
+                    for key, value in values.items()
+                )
+                + "\n"
+            )
+        Path(temporary).replace(destination)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return destination

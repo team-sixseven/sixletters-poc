@@ -76,6 +76,13 @@ def main() -> int:
             check_dependencies()
         if len(sys.argv) < 2:
             raise RuntimeError("컨테이너에서 실행할 명령이 필요합니다.")
+        from sixletters.personal_env import jupyter_data_path
+
+        kernel_data = str(jupyter_data_path(WORKSPACE))
+        existing = os.environ.get("JUPYTER_PATH", "").split(os.pathsep)
+        os.environ["JUPYTER_PATH"] = os.pathsep.join(
+            [kernel_data, *(value for value in existing if value and value != kernel_data)]
+        )
         os.execvp(sys.argv[1], sys.argv[1:])
     except (RuntimeError, OSError, ValueError) as exc:
         print(f"컨테이너 실행 실패: {exc}", file=sys.stderr)

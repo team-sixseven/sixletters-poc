@@ -1,1 +1,1 @@
-"""Shared data checks, evaluation and experiment records for the team."""
+"""Personal development environments and explicit MLflow result uploads."""

@@ -233,7 +233,6 @@ def test_rejects_unsupported_requirement_sources(isolated, spec):
         "environment.json",
         ".poc-env-state.json",
         ".poc-env.lock",
-        "config.toml",
     ],
 )
 def test_rejects_symlink_targets(isolated, name):
@@ -710,7 +709,7 @@ def test_status_reports_missing_ready_stale_and_changed_installed_packages(isola
     assert missing["state"] == "install-needed"
     assert missing["scope"] == "shared"
     assert missing["path"] == owner
-    assert missing["next_command"].startswith("./dev env sync shared")
+    assert missing["next_command"].startswith("./dev env sync Members/alice/experiments/shared")
     assert missing["active"] == []
     python = pe.env_add(path, ["poc-env-extra==1.0"])
     assert pe.env_status(path)["state"] == "ready"
@@ -768,7 +767,7 @@ def test_status_returns_promptly_while_an_environment_update_holds_gate(isolated
         status = pe.env_status(path)
     assert status["state"] == "update-needed"
     assert "완료될 때까지" in status["reason"]
-    assert status["next_command"].startswith("./dev env status shared")
+    assert status["next_command"].startswith("./dev env status Members/alice/experiments/shared")
 
 
 def test_registering_existing_ready_kernel_is_a_read_only_noop_while_running(isolated):
@@ -815,7 +814,7 @@ def test_new_empty_environment_executes_with_common_runtime_without_installing(
         sys.prefix if sys.prefix != sys.base_prefix else None,
         "shared-source",
     ]
-    assert json.loads(output[3])["args"] == ["--seed", "42"]
+    assert output[3] is None
     assert pe.env_sync(path) == Path(sys.executable)
     status = pe.env_status(path)
     assert status["state"] == "ready" and status["next_command"] is None
@@ -1149,7 +1148,7 @@ def test_active_reader_refresh_guidance_waits_instead_of_relocking(isolated):
         status = pe.env_status(second)
         assert "Shut Down Kernel" in status["reason"]
         assert "--relock" not in status["next_command"]
-        assert "env status second" in status["next_command"]
+        assert "env status Members/alice/experiments/second" in status["next_command"]
         with pytest.raises(ValueError, match="실행 중") as error:
             pe.env_sync(second)
         assert "--relock" not in str(error.value)

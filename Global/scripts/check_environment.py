@@ -62,7 +62,7 @@ def main() -> int:
                 name: importlib.metadata.version(name)
                 for name in ("numpy", "pandas", "scikit-learn", "wfdb", "neurokit2", "jupyterlab")
             },
-            "synthetic_data_and_ecg": "passed",
+            "packages_csv_plot": "passed",
             "gpu": gpu if gpu else "not requested",
         }
         (args.output_dir / "environment.json").write_text(
