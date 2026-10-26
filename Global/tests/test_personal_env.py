@@ -1182,3 +1182,15 @@ def test_kernel_and_status_both_require_relock_after_shared_package_change(isola
     status = pe.env_status(path)
     assert status["reason"] == error.value.reason
     assert status["next_command"] in str(error.value)
+
+
+def test_windows_path_guidance_uses_portable_separators(monkeypatch):
+    from pathlib import PureWindowsPath
+
+    root = PureWindowsPath("C:/workspace")
+    monkeypatch.setattr(pe, "project_root", lambda _: root)
+    monkeypatch.setattr(pe, "command_prefix", lambda: ["./dev"])
+    assert (
+        pe._env_command(root / "Members/alice/work", "sync", "--relock")
+        == "./dev env sync Members/alice/work --relock"
+    )

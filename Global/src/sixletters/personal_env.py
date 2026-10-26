@@ -767,9 +767,9 @@ def command_prefix() -> list[str]:
 def _env_command(experiment: Path, action: str, *options: str) -> str:
     command = command_prefix()
     try:
-        location = str(experiment.relative_to(project_root(experiment)))
+        location = experiment.relative_to(project_root(experiment)).as_posix()
     except ValueError:
-        location = str(experiment)
+        location = experiment.as_posix()
     command.extend(["env", action, location])
     return shlex.join([*command, *options])
 
