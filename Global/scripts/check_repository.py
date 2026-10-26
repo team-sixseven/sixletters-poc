@@ -182,6 +182,7 @@ def violations(path: Path, content: bytes) -> list[str]:
     personal_dirs = {part.casefold() for part in path.parts[2:-1]}
     if path.parts[0] == "Members" and (
         personal_dirs & {"results", "outputs"}
+        or (len(path.parts) > 3 and path.parts[2] == "models")
         or ("models" in personal_dirs and path.suffix.lower() == ".json")
     ):
         problems.append("personal results/models must not be tracked")
