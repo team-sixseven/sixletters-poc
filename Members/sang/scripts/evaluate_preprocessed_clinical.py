@@ -249,7 +249,7 @@ def main() -> int:
                     config_path,
                     *[
                         Path(__file__).resolve().parents[1] / f"model/ML/{subdir}/parameter.yaml"
-                        for subdir in ("xgboost", "catboost")
+                        for subdir in ("Logistic_Regression", "xgboost", "catboost")
                     ],
                     Path(__file__).resolve().parents[1] / "model/ML/models.py",
                     Path(__file__).resolve().parents[1] / "model/ML/dataloader/clinical.py",

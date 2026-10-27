@@ -23,7 +23,7 @@
 
 | 모델 | CPU smoke test | GPU |
 |---|---|---|
-| Random Forest, XGBoost, CatBoost, MLP | PASS (CPU, 격리/기존 로컬 환경 조합) | 미대상: 해당 구현은 CPU로 실행 |
+| Logistic Regression, Random Forest, XGBoost, CatBoost, MLP | PASS (CPU, 격리/기존 로컬 환경 조합) | 미대상: 해당 구현은 CPU로 실행 |
 | 1D-CNN, ECG Transformer | PASS (CPU 및 CUDA forward/loss/backward) | PASS: RTX 4060 |
 
 입출력 형태, 시간 측정, 관측 버전과 환경 제약은 [모델 smoke test 상세 결과](model_smoke_results.md)를 참고한다. 저장소 Docker 공통환경을 직접 사용한 재현은 daemon 권한 때문에 아직 수행하지 못했다. 실행 코드는 `scripts/smoke_model_api.py`에 있다.

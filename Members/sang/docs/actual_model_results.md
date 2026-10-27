@@ -10,6 +10,7 @@
 
 | 모델 | 입력 데이터 | N | SCD 수 | AUROC | AUPRC | Brier | 학습 시간 | 비고 |
 |---|---|---:|---:|---:|---:|---:|---:|---|
+| Logistic Regression | Clinical (64 features) | 144 | 14 | 0.682 | 0.162 | 0.097 | 0.106 s | Baseline |
 | XGBoost | Clinical (64 features) | 144 | 14 | 0.713 | 0.194 | 0.087 | 0.109 s | ML; 기존 AUROC 0.713 재현 |
 | CatBoost | Clinical (64 features) | 144 | 14 | 0.660 | 0.154 | 0.087 | 0.319 s | ML; 범주형 입력 사용 |
 | MLP | Clinical (64 features) | 144 | 14 | 0.651 | 0.149 | 0.104 | 0.419 s | DL |
@@ -20,7 +21,7 @@
 
 - 기본 분할은 환자 단위 공통 split(seed 42)다: train 671명 / SCD 65명, validation 144명 / SCD 14명, test 146명 / SCD 15명. 이 표의 `N`과 `SCD 수`는 validation 기준이다.
 - `Members/sang/datas/`의 clinical/ECG/labels CSV는 각각 992개 `patient_id`를 가지며, 세 CSV의 ID 집합은 서로 같고 저장소 MUSIC 원본의 ID 집합과도 일치했다. 평가는 손실 추적/이식 제외 기준과 고정 split을 제공하는 공통 prepared bundle에서 수행했다. 이 기준에서 31명을 제외하고 961명을 분석 코호트로 구성한다.
-- 입력은 공통 `music-1.0.1-scd-basic-v1`의 임상 feature group 64개다. 앞선 더미 smoke test의 `(256,24)`는 API 확인용이었고 실제 평가에서는 저장소의 버전 관리된 64개 clinical schema를 사용했다. 결측값 대치는 train에서만 fit했다. 범주형 변수는 XGBoost/MLP에서 one-hot 변환했고 CatBoost는 범주형 변수로 지정해 처리했다.
+- 입력은 공통 `music-1.0.1-scd-basic-v1`의 임상 feature group 64개다. 앞선 더미 smoke test의 `(256,24)`는 API 확인용이었고 실제 평가에서는 저장소의 버전 관리된 64개 clinical schema를 사용했다. 결측값 대치는 train에서만 fit했다. 범주형 변수는 Logistic Regression/XGBoost/MLP에서 one-hot 변환했고 CatBoost는 범주형 변수로 지정해 처리했다.
 - AUPRC는 저장소 비교 관례에 따라 Average Precision(AP)으로 계산했다. Brier는 validation 확률과 정답으로 계산했다.
 - 학습 시간은 CPU에서 한 번 측정한 `fit` 시간이며, 파이프라인 모델은 train 데이터 전처리 학습을 포함한다. CatBoost 시간에는 train 범주형 문자열 변환이 포함된다. 반복 평균이 아니므로 성능 벤치마크가 아니다.
 - 현재 validation 양성은 14명뿐이므로 한두 명의 점수 순위 변화도 지표에 큰 영향을 줄 수 있다. 신뢰구간도 계산하지 않았다. 이 결과만으로 모델 우열이나 임상 효용을 결론내리지 않는다.

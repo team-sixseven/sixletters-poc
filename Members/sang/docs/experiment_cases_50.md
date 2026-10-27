@@ -22,7 +22,7 @@
 
 | 케이스 | 입력 데이터 | 후보 모델 | 목적 | 상태 |
 |---|---|---|---|---|
-| C1 임상 | 임상 정형 변수 (실제 CSV 입력 23개) | Random Forest, XGBoost, CatBoost, MLP | 정형 모델 비교 | 완료; 기존 결과 참조 |
+| C1 임상 | 임상 정형 변수 (실제 CSV 입력 23개) | Logistic Regression, Random Forest, XGBoost, CatBoost, MLP | 임상 baseline 및 정형 모델 비교 | 완료; 기존 결과 참조 |
 | C2 ECG 통계 특징 | 30초 ECG 구간에서 계산한 검증된 특징 | XGBoost | ECG 정량 특징 단독 예측력 | 특징 정의·코호트 구성 전 |
 | C3 임상 + ECG 특징 | 임상 변수 + 검증된 ECG 특징 | XGBoost | ECG 특징의 추가 가치 | 특징 정의·코호트 구성 전 |
 | C4 Segment Attention MIL | 환자별 ECG 구간 특징 `(B,S,F)` | Attention MIL | 구간별 중요도 집계 | 현재 ECG 50명 파일럿의 16개 통계 특징으로 탐색 비교 |
@@ -35,6 +35,7 @@ Transformer 문헌 후보는 CNN–TST를 첫 비교 prototype, ConvTran을 후�
 
 | 모델 | 장점 | 제한 및 확인 사항 |
 |---|---|---|
+| Logistic Regression | 빠른 baseline, 계수 해석 가능 | 비선형 관계를 직접 학습하지 않음 |
 | Random Forest | 안정적인 비선형 앙상블, 변수 중요도 비교 가능 | 외삽·확률 보정 확인 필요 |
 | XGBoost / CatBoost | 비선형 상호작용 학습; 트리 기반 설명 도구 적용 가능 | 소표본 과적합·튜닝 영향, 임계값 및 calibration 확인 필요 |
 | MLP | 정형 변수의 비선형 조합 학습 | 표본이 작아 과적합; 설명성 보완 필요 |
@@ -66,6 +67,7 @@ Transformer 문헌 후보는 CNN–TST를 첫 비교 prototype, ConvTran을 후�
 
 | 케이스 | 입력 데이터 | 중요도 | 모델 구분 | 모델 | 담당 | 상태 | ROC-AUC | PR-AUC (AP) | Sensitivity | Specificity | Brier | MLflow 링크 | 메모 |
 |---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---|---|
+| C1 임상 – Logistic Regression | 임상 | 해당 없음 | 전통 ML | Logistic Regression | 남상기 | 완료 | 0.771 | 0.260 | 0.100 | 0.973 | 0.111 | — | Validation N=83/SCD=10; 23 features; CPU |
 | C1 임상 – Random Forest | 임상 | 해당 없음 | 전통 ML | Random Forest | 남상기 | 완료 | 0.782 | 0.369 | 0.000 | 1.000 | 0.094 | — | Validation N=83/SCD=10; 23 features; CPU |
 | C1 임상 – XGBoost | 임상 | 해당 없음 | 전통 ML | XGBoost | 남상기 | 완료 | 0.695 | 0.240 | 0.100 | 0.973 | 0.107 | — | Validation N=83/SCD=10; 23 features; CPU |
 | C1 임상 – CatBoost | 임상 | 해당 없음 | 전통 ML | CatBoost | 남상기 | 완료 | 0.733 | 0.390 | 0.100 | 1.000 | 0.095 | — | Validation N=83/SCD=10; AP 최고. Test N=83/SCD=10: AUROC 0.781, AP 0.335, Brier 0.094 |

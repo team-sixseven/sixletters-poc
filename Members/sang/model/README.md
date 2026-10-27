@@ -21,6 +21,7 @@ model/
 │   ├── catboost/                        # CatBoost 모델
 │   ├── data/                            # 데이터 경로·형식 안내
 │   ├── dataloader/                      # 임상 CSV·split 로딩
+│   ├── Logistic_Regression/             # Logistic Regression 모델
 │   ├── model_choice.yaml                # 평가 모델·feature 설정
 │   ├── model_experiment_only_ML.ipynb   # ML 실험 노트북
 │   ├── models.py                        # 모델 생성·공통 전처리
@@ -53,7 +54,7 @@ model/
 
 ## 실행 기준
 
-- 임상 모델의 실제 구현은 `../scripts/evaluate_preprocessed_clinical.py`이며 XGBoost와 CatBoost를 같은 환자 분할에서 비교합니다.
+- 임상 모델의 실제 구현은 `../scripts/evaluate_preprocessed_clinical.py`이며 Logistic Regression, XGBoost, CatBoost를 같은 환자 분할에서 비교합니다.
 - 임상 feature 입력은 `../datas/clincal/clinical_clean.csv`, split membership은 `../datas/clincal/splits/{train,val,test}.csv`입니다. 모델 팩토리는 `ML/models.py`, loader는 `ML/dataloader/clinical.py`, 비교 runner는 `../scripts/evaluate_preprocessed_clinical.py`입니다.
 - Holter 모델의 실제 구현은 `../scripts/evaluate_ecg_architectures.py`, 모델 정의는 `DL/models.py`입니다. 파형 입력은 `../datas/Holter/windows/Pxxxx.npy` 환자별 파일입니다.
 - NPY windows loader는 `DL/dataloader/holter_windows.py`입니다. `(N_windows,3,2000)`에서 환자별 8개 window를 기록 전체에 균등하게 골라 `(N,8,3,2000)`으로 구성합니다.

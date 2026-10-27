@@ -7,6 +7,7 @@ from pathlib import Path
 from catboost import CatBoostClassifier
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from xgboost import XGBClassifier
@@ -58,6 +59,7 @@ def make_preprocessor(features: list[str], config: dict | None = None) -> Column
 
 
 MODEL_CONFIGS = {
+    "Logistic Regression": Path(__file__).parent / "Logistic_Regression/parameter.yaml",
     "XGBoost": Path(__file__).parent / "xgboost/parameter.yaml",
     "CatBoost": Path(__file__).parent / "catboost/parameter.yaml",
 }
@@ -77,7 +79,12 @@ def build_models(
     for name in names:
         params = load_yaml(MODEL_CONFIGS[name])
         preprocessor = make_preprocessor(features, preprocessing)
-        if name == "XGBoost":
+        if name == "Logistic Regression":
+            estimator = LogisticRegression(
+                max_iter=params["max_iter"], random_state=params["random_state"]
+            )
+            models[name] = make_pipeline(preprocessor, estimator)
+        elif name == "XGBoost":
             estimator = XGBClassifier(
                 n_estimators=params["n_estimators"],
                 max_depth=params["max_depth"],
