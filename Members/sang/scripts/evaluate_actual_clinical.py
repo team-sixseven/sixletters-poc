@@ -16,7 +16,6 @@ import sklearn
 from sklearn.base import clone
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
@@ -73,10 +72,6 @@ def main() -> int:
     from xgboost import XGBClassifier
 
     models = {
-        "Logistic Regression": make_pipeline(
-            clone(preprocessor),
-            LogisticRegression(max_iter=1000, random_state=42),
-        ),
         "XGBoost": make_pipeline(
             clone(preprocessor),
             XGBClassifier(
