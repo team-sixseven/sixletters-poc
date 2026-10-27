@@ -2,7 +2,7 @@
 
 ## 사용 가능한 전달 경로
 
-평가 스크립트는 모델별 결과를 계약 버전이 포함된 로컬 handoff bundle로 저장합니다. `import_bundle_to_mlflow.py`가 manifest와 예측 파일·모델 파일의 형식, ID/정답 지문, 파일 checksum을 확인한 다음 MLflow에 모델 후보별 run을 등록합니다. 기존 `sixletters.Experiment.save()` 데이터 계약에 결과를 끼워 맞추지 않습니다.
+평가 스크립트는 모델별 결과를 계약 버전이 포함된 로컬 handoff bundle로 저장합니다. `import_bundle_to_mlflow.py`가 manifest와 예측 파일·모델 파일의 형식, ID/정답 지문, 파일 checksum을 확인한 다음 MLflow에 모델 후보별 run을 등록합니다. sklearn/PyTorch 모델은 flavor와 실행 환경이 포함된 MLflow Model 디렉터리도 함께 저장하므로 MLflow 모델 API로 불러올 수 있습니다. 기존 `sixletters.Experiment.save()` 데이터 계약에 결과를 끼워 맞추지 않습니다.
 
 이 importer는 `Global` 프로젝트의 `mlflow-skinny==3.17.1`에 포함된 `MlflowClient`를 사용합니다. `--upload`가 없으면 bundle만 점검하고 네트워크에 접속하지 않습니다. 실제 업로드에는 명시적인 tracking URI가 필요합니다.
 
@@ -16,11 +16,10 @@ uv run --project Global --extra ml python Members/sang/scripts/evaluate_preproce
 ```
 
 ```bash
-uv run --project Global --extra gpu python Members/sang/scripts/evaluate_ecg_architectures.py \
-  --tracking-output Members/sang/model/outputs/handoff/holter-ecg-<run-label>
+uv run --project Global --extra gpu python Members/sang/scripts/smoke_p0002_holter.py
 ```
 
-`<run-label>`은 실행마다 고유하게 지정합니다. 다음은 업로드 없이 bundle을 검사합니다.
+현재 Holter 범위는 실제 `P0002.npy` 하나의 입력 전처리와 모델 forward smoke뿐입니다. 학습·성능지표·Holter MLflow bundle은 생성하지 않습니다. `evaluate_ecg_architectures.py`는 split에 등록된 여러 환자의 NPY 파일을 학습·평가하므로 이 단일 환자 범위에서 실행하지 않습니다. 임상 bundle은 실행마다 고유한 `<run-label>`을 지정해 생성합니다. 다음은 업로드 없이 임상 bundle을 검사합니다.
 
 ```bash
 uv run --project Global python Members/sang/model/tracking/import_bundle_to_mlflow.py \
@@ -38,7 +37,7 @@ uv run --project Global python Members/sang/model/tracking/import_bundle_to_mlfl
   --upload
 ```
 
-Holter bundle도 같은 importer로 전달합니다. run 이름은 모델·dataset 조합으로 생성하고, tag에는 dataset, 입력 그룹, 모델명, validation AP 기준 선택 여부와 bundle hash를 기록합니다. 파라미터에는 모델 설정을 평탄화해 저장하며, 지표에는 `validation_`, `validation_threshold_`, `training_`, `test_` 접두사를 붙입니다. AUROC·AP·Brier는 `roc_auc`, `average_precision`, `brier_score` 이름으로 저장합니다.
+여러 환자의 실제 Holter 데이터와 환자 단위 train/validation/test 구성이 확보된 뒤 cohort 평가를 실행하면, 해당 bundle도 같은 importer로 전달할 수 있습니다. 현재 `P0002.npy` 단일 환자 smoke 결과는 run이나 모델 성능으로 MLflow에 등록하지 않습니다. importer는 run 이름을 모델·dataset 조합으로 생성하고, tag에 dataset, 입력 그룹, 모델명, validation AP 기준 선택 여부와 bundle hash를 기록합니다. 파라미터에는 모델 설정을 평탄화해 저장하며, 지표에는 `validation_`, `validation_threshold_`, `training_`, `test_` 접두사를 붙입니다. AUROC·AP·Brier는 `roc_auc`, `average_precision`, `brier_score` 이름으로 저장합니다.
 
 같은 bundle을 다시 가져오면 완료된 모델 run은 건너뛰고, 실패한 모델만 재시도합니다. 이미 진행 중인 같은 bundle import가 발견되면 중복 생성을 중단합니다. importer는 새 run의 ID와 이미 등록되어 건너뛴 모델 목록을 출력합니다.
 
@@ -52,12 +51,42 @@ handoff-bundle/
     ├── validation_predictions.csv
     ├── test_predictions.csv        # validation AP 선택 모델만
     └── models/
-        ├── validation_model.pkl   # 임상 모델
-        ├── selected_test_model.pkl # 임상 선택 모델만
-        └── model_state_dict.pt     # Holter 모델
+        ├── validation_model.pkl                 # 임상 원본 estimator
+        ├── validation_mlflow_model/             # 임상 MLflow sklearn flavor
+        │   ├── MLmodel
+        │   ├── conda.yaml
+        │   ├── requirements.txt
+        │   └── model.pkl
+        ├── selected_test_mlflow_model/          # 선택 임상 모델만
+        ├── model_state_dict.pt                  # Holter 원본 state dict
+        └── mlflow_model/                        # Holter MLflow PyTorch flavor
 ```
 
-각 MLflow run에는 해당 모델의 `run.json`, 예측 파일, 체크섬이 확인된 모델 artifact, manifest를 `handoff/` 경로에 저장합니다. 원시 임상 CSV, split 파일, NPY 파형은 importer가 업로드하지 않습니다. Test 지표와 test 예측은 validation AP로 선택된 모델에만 있어야 합니다.
+각 MLflow run에는 해당 모델의 `run.json`, 예측 파일, 체크섬이 확인된 모델 artifact, manifest를 `handoff/` 경로에 저장합니다. 모델 flavor 디렉터리는 `handoff/models/<artifact-name>/`에 보존됩니다. 원시 임상 CSV, split 파일, NPY 파형은 importer가 업로드하지 않습니다. Test 지표와 test 예측은 validation AP로 선택된 모델에만 있어야 합니다. 이 문서의 Holter 모델 artifact 예시는 다수 환자 cohort 평가를 수행한 경우에만 생성됩니다.
+
+### MLflow에 등록된 모델 불러오기
+
+ML run URI는 다음처럼 사용할 수 있습니다. 기본 sklearn flavor의 `predict_proba()`는 `classes_` 순서대로 두 확률 열을 반환하며, 현재 이진 라벨에서는 두 번째 열이 `SCD=1` 확률입니다.
+
+```python
+import mlflow.sklearn
+
+model = mlflow.sklearn.load_model(f"runs:/{run_id}/handoff/models/validation_mlflow_model")
+scd_probability = model.predict_proba(features)[:, 1]
+```
+
+다수 환자로 학습한 Holter MLflow Model이 생기면 `mlflow.pytorch.load_model()`로 불러와 logits에 sigmoid를 적용합니다. 현재 P0002 smoke는 저장된 학습 모델이 아니므로 아래 코드를 실행할 Holter run은 없습니다.
+
+```python
+import mlflow.pytorch
+import torch
+
+model = mlflow.pytorch.load_model(f"runs:/{run_id}/handoff/models/mlflow_model")
+with torch.no_grad():
+    scd_probability = torch.sigmoid(model(ecg_tensor))
+```
+
+모델 디렉터리에는 환자 데이터가 포함되지 않습니다. Clinical signature는 feature 이름과 자료형만 담고 input example은 저장하지 않습니다. Holter flavor에는 모델 class 재구성에 필요한 `model/config.py`와 `model/DL/models.py`만 포함하며, dataset·split·outputs 디렉터리는 포함하지 않습니다. 모델 flavor는 Python pickle/cloudpickle 직렬화를 사용하므로 팀이 생성하고 체크섬을 검증한 신뢰 가능한 bundle만 로드하세요.
 
 예측 CSV는 환자 ID·정답·점수를 포함합니다. 이 파일은 MLflow artifact로 업로드되므로 팀의 환자별 예측 데이터 업로드 정책이 허용된 서버에만 `--upload`를 실행하세요. 환자 ID와 정답은 MLflow params나 tags에는 기록하지 않습니다.
 

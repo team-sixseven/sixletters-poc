@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import platform
 import sys
@@ -26,6 +27,7 @@ from model.evaluation.DL.holter import (
 )
 from model.evaluation.reporting import create_report_dir, metric, write_report
 from model.tracking.bundle import write_bundle
+from model.tracking.model_flavors import save_pytorch_model
 
 
 @torch.no_grad()
@@ -260,6 +262,19 @@ def main() -> int:
                     for key, tensor in model_lookup[name].state_dict().items()
                 }
                 torch.save(portable_state, model_path)
+                flavor_path = temporary_dir / f"{model_path.stem}_mlflow_model"
+                model_input_shape = (
+                    (args.windows_per_patient, 16)
+                    if name in segment_statistics_models
+                    else (args.windows_per_patient, choice["leads"], args.samples_per_window)
+                )
+                save_pytorch_model(
+                    model_lookup[name],
+                    flavor_path,
+                    input_shape=model_input_shape,
+                    source_model_dir=Path(__file__).resolve().parents[1] / "model",
+                    model_name=name,
+                )
                 run_record = {
                     "model": name,
                     "input_group": (
@@ -291,7 +306,10 @@ def main() -> int:
                         "cuda_peak_allocated_mib": result["cuda_peak_allocated_mib"],
                     },
                     "validation_predictions": val_frame,
-                    "artifacts": {"model_state_dict.pt": model_path},
+                    "artifacts": {
+                        "model_state_dict.pt": model_path,
+                        "mlflow_model": flavor_path,
+                    },
                 }
                 if name == selected:
                     run_record["test_metrics"] = test_metrics
@@ -322,7 +340,8 @@ def main() -> int:
                 selected_model=selected,
                 environment={
                     "python": platform.python_version(),
-                    "pytorch": torch.__version__,
+                    "pytorch": str(torch.__version__),
+                    "mlflow_skinny": importlib.metadata.version("mlflow-skinny"),
                     "cuda_runtime": torch.version.cuda,
                     "device": str(device),
                     "gpu": torch.cuda.get_device_name(0) if device.type == "cuda" else None,
@@ -338,13 +357,15 @@ def main() -> int:
                     Path(__file__).resolve().parents[1] / "model/DL/dataloader/holter_windows.py",
                     Path(__file__).resolve().parents[1] / "model/config.py",
                     Path(__file__).resolve().parents[1] / "model/tracking/bundle.py",
+                    Path(__file__).resolve().parents[1] / "model/tracking/model_flavors.py",
                 ],
             )
 
     payload = {
         "purpose": "exploratory patient-level comparison on the fixed MUSIC clinical split; not external validation",
         "python": platform.python_version(),
-        "pytorch": torch.__version__,
+        "pytorch": str(torch.__version__),
+        "mlflow_skinny": importlib.metadata.version("mlflow-skinny"),
         "cuda_runtime": torch.version.cuda,
         "device": str(device),
         "gpu": torch.cuda.get_device_name(0) if device.type == "cuda" else None,

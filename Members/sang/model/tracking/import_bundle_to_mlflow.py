@@ -31,6 +31,16 @@ def _contained_file(root: Path, relative: str) -> Path:
     return resolved
 
 
+def _contained_path(root: Path, relative: str) -> Path:
+    candidate = root / relative
+    if candidate.is_symlink():
+        raise ValueError(f"Bundle paths must not be symlinks: {relative}")
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(root.resolve()) or not resolved.exists():
+        raise ValueError(f"Invalid or missing bundle path: {relative}")
+    return resolved
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -101,7 +111,7 @@ def validate_bundle(bundle_path: Path) -> tuple[dict, list[dict], str]:
         raise ValueError("--bundle must be a real directory, not a symlink")
     manifest_path = _contained_file(root, "manifest.json")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("contract") != CONTRACT or manifest.get("contract_version") not in {1, 2}:
+    if manifest.get("contract") != CONTRACT or manifest.get("contract_version") not in {1, 2, 3}:
         raise ValueError("Unsupported handoff bundle contract or version")
     if not isinstance(manifest.get("runs"), list) or not manifest["runs"]:
         raise ValueError("Manifest must contain at least one run")
@@ -141,12 +151,54 @@ def validate_bundle(bundle_path: Path) -> tuple[dict, list[dict], str]:
         elif run.get("test_metrics") is not None:
             raise ValueError(f"Test metrics have no test predictions: {relative}")
 
-        for artifact in run.get("model_artifacts", {}).values():
-            artifact_path = _contained_file(root, artifact.get("path", ""))
-            if artifact_path.stat().st_size != artifact.get("bytes"):
-                raise ValueError(f"Model artifact size mismatch: {artifact_path}")
-            if _sha256(artifact_path) != artifact.get("sha256"):
-                raise ValueError(f"Model artifact checksum mismatch: {artifact_path}")
+        model_artifacts = run.get("model_artifacts", {})
+        if not model_artifacts:
+            raise ValueError(f"Run has no model artifacts: {relative}")
+        for artifact in model_artifacts.values():
+            artifact_path = _contained_path(root, artifact.get("path", ""))
+            model_root = (run_path.parent / "models").resolve()
+            if not artifact_path.is_relative_to(model_root):
+                raise ValueError("Model artifacts must stay under the run's models/ directory")
+            if artifact_path.is_file():
+                if artifact_path.stat().st_size != artifact.get("bytes"):
+                    raise ValueError(f"Model artifact size mismatch: {artifact_path}")
+                if _sha256(artifact_path) != artifact.get("sha256"):
+                    raise ValueError(f"Model artifact checksum mismatch: {artifact_path}")
+            elif artifact_path.is_dir():
+                if manifest.get("contract_version") < 3:
+                    raise ValueError("Directory model artifacts require handoff contract version 3")
+                entries = list(artifact_path.rglob("*"))
+                if any(path.is_symlink() for path in entries):
+                    raise ValueError(
+                        f"Model artifact directories must not contain symlinks: {artifact_path}"
+                    )
+                expected_files = artifact.get("files")
+                if not isinstance(expected_files, list) or not expected_files:
+                    raise ValueError(
+                        f"Directory model artifact has no file checksums: {artifact_path}"
+                    )
+                expected_by_path = {item.get("path"): item for item in expected_files}
+                if len(expected_by_path) != len(expected_files):
+                    raise ValueError(
+                        f"Duplicate file paths in model artifact manifest: {artifact_path}"
+                    )
+                actual_files = {
+                    path.relative_to(artifact_path).as_posix() for path in entries if path.is_file()
+                }
+                if actual_files != set(expected_by_path) or "MLmodel" not in actual_files:
+                    raise ValueError(
+                        f"MLflow model directory contents do not match the manifest: {artifact_path}"
+                    )
+                for file_relative, file_metadata in expected_by_path.items():
+                    file_path = _contained_file(root, f"{artifact['path']}/{file_relative}")
+                    if file_path.stat().st_size != file_metadata.get("bytes"):
+                        raise ValueError(f"Model artifact size mismatch: {file_path}")
+                    if _sha256(file_path) != file_metadata.get("sha256"):
+                        raise ValueError(f"Model artifact checksum mismatch: {file_path}")
+            else:
+                raise ValueError(
+                    f"Model artifact is not a regular file or directory: {artifact_path}"
+                )
 
         runs.append(
             {
@@ -190,13 +242,12 @@ def _flatten_parameters(value: Any, prefix: str = "") -> dict[str, str]:
 
 def _numeric_metrics(prefix: str, values: dict) -> dict[str, float]:
     metrics = {}
-    metric_prefix = prefix.removesuffix("_threshold")
     for key, value in values.items():
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             continue
         number = float(value)
         if math.isfinite(number):
-            metrics[f"{metric_prefix}_{METRIC_NAMES.get(key, key)}"] = number
+            metrics[f"{prefix}_{METRIC_NAMES.get(key, key)}"] = number
     return metrics
 
 
@@ -306,7 +357,14 @@ def import_bundle(
                 client.log_artifact(run_id, str(item["test_prediction"]), artifact_path="handoff")
             for artifact in run_data.get("model_artifacts", {}).values():
                 artifact_path = (bundle_path.resolve() / artifact["path"]).resolve()
-                client.log_artifact(run_id, str(artifact_path), artifact_path="handoff/models")
+                if artifact_path.is_dir():
+                    client.log_artifacts(
+                        run_id,
+                        str(artifact_path),
+                        artifact_path=f"handoff/models/{artifact_path.name}",
+                    )
+                else:
+                    client.log_artifact(run_id, str(artifact_path), artifact_path="handoff/models")
             client.set_terminated(run_id, status="FINISHED")
         except Exception:
             client.set_terminated(run_id, status="FAILED")

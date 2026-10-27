@@ -124,18 +124,47 @@ def write_bundle(
             artifacts = {}
             for artifact_name, source in run.get("artifacts", {}).items():
                 source = Path(source)
-                if not source.is_file():
+                if source.is_symlink() or not source.exists():
                     raise FileNotFoundError(f"Model artifact does not exist: {source}")
                 name = Path(artifact_name).name
                 if not name or name in artifacts:
                     raise ValueError(f"Invalid or duplicate model artifact name: {artifact_name}")
                 destination = model_dir / name
-                shutil.copyfile(source, destination)
-                artifacts[name] = {
-                    "path": destination.relative_to(stage).as_posix(),
-                    "bytes": destination.stat().st_size,
-                    "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
-                }
+                if source.is_file():
+                    shutil.copyfile(source, destination)
+                    artifacts[name] = {
+                        "path": destination.relative_to(stage).as_posix(),
+                        "bytes": destination.stat().st_size,
+                        "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+                    }
+                elif source.is_dir():
+                    if any(item.is_symlink() for item in source.rglob("*")):
+                        raise ValueError(
+                            f"Model artifact directories must not contain symlinks: {source}"
+                        )
+                    shutil.copytree(source, destination)
+                    files = []
+                    for item in sorted(destination.rglob("*")):
+                        if item.is_file():
+                            files.append(
+                                {
+                                    "path": item.relative_to(destination).as_posix(),
+                                    "bytes": item.stat().st_size,
+                                    "sha256": hashlib.sha256(item.read_bytes()).hexdigest(),
+                                }
+                            )
+                    if not files or not (destination / "MLmodel").is_file():
+                        raise ValueError(
+                            f"Directory model artifacts must contain an MLmodel file: {source}"
+                        )
+                    artifacts[name] = {
+                        "path": destination.relative_to(stage).as_posix(),
+                        "files": files,
+                    }
+                else:
+                    raise ValueError(
+                        f"Model artifacts must be files or MLflow model directories: {source}"
+                    )
 
             detail = {
                 "model": model_name,
@@ -180,7 +209,7 @@ def write_bundle(
 
         manifest = {
             "contract": "sixletters-model-handoff",
-            "contract_version": 2,
+            "contract_version": 3,
             "experiment": experiment,
             "dataset": dataset,
             "input_group": input_group,

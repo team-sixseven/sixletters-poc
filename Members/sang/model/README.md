@@ -49,7 +49,8 @@ model/
     ├── __pycache__/                     # Python 임시 캐시
     ├── bundle.py                        # 결과 bundle 생성
     ├── handoff.yaml                     # bundle 계약·파일 정책
-    └── import_bundle_to_mlflow.py       # bundle 검증·MLflow 업로드
+    ├── import_bundle_to_mlflow.py       # bundle 검증·MLflow 업로드
+    └── model_flavors.py                 # sklearn·PyTorch MLflow Model 저장
 ```
 
 ## 실행 기준
@@ -57,6 +58,7 @@ model/
 - 임상 모델의 실제 구현은 `../scripts/evaluate_preprocessed_clinical.py`이며 Logistic Regression, XGBoost, CatBoost를 같은 환자 분할에서 비교합니다.
 - 임상 feature 입력은 `../datas/clincal/clinical_clean.csv`, split membership은 `../datas/clincal/splits/{train,val,test}.csv`입니다. 모델 팩토리는 `ML/models.py`, loader는 `ML/dataloader/clinical.py`, 비교 runner는 `../scripts/evaluate_preprocessed_clinical.py`입니다.
 - Holter 모델의 실제 구현은 `../scripts/evaluate_ecg_architectures.py`, 모델 정의는 `DL/models.py`입니다. 파형 입력은 `../datas/Holter/windows/Pxxxx.npy` 환자별 파일입니다.
+- 현재 Holter 확인 범위는 `../datas/Holter/windows/P0002.npy` 한 파일의 forward smoke이며, 학습·성능지표·MLflow bundle은 만들지 않습니다. [`smoke_p0002_holter.py`](../scripts/smoke_p0002_holter.py)를 사용합니다.
 - NPY windows loader는 `DL/dataloader/holter_windows.py`입니다. `(N_windows,3,2000)`에서 환자별 8개 window를 기록 전체에 균등하게 골라 `(N,8,3,2000)`으로 구성합니다.
 - `ML/models.py`와 `DL/models.py`가 공통 전처리와 네트워크 구현을 보유합니다. 평가 스크립트는 `model_choice.yaml`, 모델별 `parameter.yaml`·`model_set.yaml`·`transformer.yaml`을 읽어 후보 목록, 데이터 경로, 학습값과 architecture 설정을 적용합니다. 모델별 하위 Python 파일은 공통 구현을 노출하는 entry point입니다.
 - 두 평가 스크립트는 `evaluation/ML/clinical.py`, `evaluation/DL/holter.py`의 metric 함수를 사용합니다. 저장된 prediction만 다시 평가하는 방법은 [evaluation README](evaluation/README.md)에 있습니다.

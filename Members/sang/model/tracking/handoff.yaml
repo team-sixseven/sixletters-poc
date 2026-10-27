@@ -1,5 +1,5 @@
 contract: sixletters-model-handoff
-contract_version: 2
+contract_version: 3
 upload_mode: explicit_mlflow_import
 run_granularity: one_model_per_run
 selection:
@@ -16,7 +16,14 @@ inputs:
 required_run_files:
   - run.json
   - validation_predictions.csv
-  - models/
+  - models/ (at least one checksummed model artifact)
+model_artifacts:
+  sklearn:
+    format: MLflow sklearn flavor directory
+    inference: predict_proba returns columns in classes_ order
+  pytorch:
+    format: MLflow PyTorch flavor directory
+    inference: patient-level SCD logits; apply sigmoid for risk probability
 optional_run_files:
   - test_metrics_in_run_json_for_selected_model_only
   - test_predictions.csv_for_selected_model_only
@@ -28,6 +35,7 @@ never_upload:
   - source datasets
   - raw ECG waveforms
   - split CSV files
+  - patient data in model signatures or input examples
   - credentials
   - patient-level data as MLflow params or tags
 proposed_tags:

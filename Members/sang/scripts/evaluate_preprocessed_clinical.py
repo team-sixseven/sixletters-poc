@@ -26,6 +26,7 @@ from model.ML.dataloader.clinical import load_clinical_splits
 from model.ML.models import CATEGORICAL_FEATURES as CATEGORICAL
 from model.ML.models import build_models
 from model.tracking.bundle import write_bundle
+from model.tracking.model_flavors import save_sklearn_model
 
 
 def _classifier(estimator):
@@ -174,6 +175,10 @@ def main() -> int:
             }
         )
         run_records = []
+        feature_dtypes = {
+            name: "long" if pd.api.types.is_integer_dtype(train[name].dtype) else "double"
+            for name in features
+        }
         with tempfile.TemporaryDirectory(prefix="scd-clinical-models-") as temporary:
             temporary_dir = Path(temporary)
             for row in rows:
@@ -185,6 +190,15 @@ def main() -> int:
                 model_path = temporary_dir / f"{name.lower().replace(' ', '_')}.pkl"
                 with model_path.open("wb") as stream:
                     pickle.dump(estimator, stream)
+                flavor_path = temporary_dir / f"{name.lower().replace(' ', '_')}_mlflow_model"
+                save_sklearn_model(
+                    estimator,
+                    flavor_path,
+                    feature_names=features,
+                    categorical_features=CATEGORICAL,
+                    feature_dtypes=feature_dtypes,
+                    model_name=name,
+                )
                 run_record = {
                     "model": name,
                     "parameters": {
@@ -208,14 +222,27 @@ def main() -> int:
                         **row["validation_threshold_metrics"],
                     },
                     "validation_predictions": validation_predictions[name],
-                    "artifacts": {"validation_model.pkl": model_path},
+                    "artifacts": {
+                        "validation_model.pkl": model_path,
+                        "validation_mlflow_model": flavor_path,
+                    },
                     "warnings": row["warnings"],
                 }
                 if name == selected_name:
                     final_model_path = temporary_dir / "selected_test_model.pkl"
                     with final_model_path.open("wb") as stream:
                         pickle.dump(final_model, stream)
+                    selected_flavor_path = temporary_dir / "selected_test_mlflow_model"
+                    save_sklearn_model(
+                        final_model,
+                        selected_flavor_path,
+                        feature_names=features,
+                        categorical_features=CATEGORICAL,
+                        feature_dtypes=feature_dtypes,
+                        model_name=name,
+                    )
                     run_record["artifacts"]["selected_test_model.pkl"] = final_model_path
+                    run_record["artifacts"]["selected_test_mlflow_model"] = selected_flavor_path
                     run_record["test_metrics"] = {
                         key: value
                         for key, value in test_result.items()
@@ -240,6 +267,7 @@ def main() -> int:
                     "numpy": np.__version__,
                     "pandas": pd.__version__,
                     "scikit_learn": sklearn.__version__,
+                    "mlflow_skinny": importlib.metadata.version("mlflow-skinny"),
                     "xgboost": importlib.metadata.version("xgboost"),
                     "catboost": importlib.metadata.version("catboost"),
                 },
@@ -257,6 +285,7 @@ def main() -> int:
                     Path(__file__).resolve().parents[1] / "model/evaluation/core.py",
                     Path(__file__).resolve().parents[1] / "model/config.py",
                     Path(__file__).resolve().parents[1] / "model/tracking/bundle.py",
+                    Path(__file__).resolve().parents[1] / "model/tracking/model_flavors.py",
                 ],
             )
 
@@ -279,6 +308,7 @@ def main() -> int:
             "numpy": np.__version__,
             "pandas": pd.__version__,
             "scikit_learn": sklearn.__version__,
+            "mlflow_skinny": importlib.metadata.version("mlflow-skinny"),
             "xgboost": importlib.metadata.version("xgboost"),
             "catboost": importlib.metadata.version("catboost"),
         },

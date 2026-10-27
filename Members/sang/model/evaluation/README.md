@@ -36,10 +36,10 @@ P0001,0,0.13
 
 ```bash
 python Members/sang/scripts/evaluate_preprocessed_clinical.py
-python Members/sang/scripts/evaluate_ecg_architectures.py
+uv run --project Global --extra gpu python Members/sang/scripts/smoke_p0002_holter.py
 ```
 
-출력 위치를 바꾸려면 `--report-root /path/to/evaluation-runs`를 지정합니다. 임상은 각 후보 모델을 train split에서 각각 학습하고 validation Average Precision으로 후보를 선택한 뒤, 선택된 모델만 train+validation으로 다시 학습해 test를 한 번 평가합니다. Holter도 각 후보를 독립 학습하고 validation 기준으로 선택하며 선택 모델만 test를 평가합니다. 임상과 Holter는 환자 집합과 입력 조건이 달라 같은 순위표로 합치지 않습니다.
+출력 위치를 바꾸려면 `--report-root /path/to/evaluation-runs`를 지정합니다. 임상은 각 후보 모델을 train split에서 각각 학습하고 validation Average Precision으로 후보를 선택한 뒤, 선택된 모델만 train+validation으로 다시 학습해 test를 한 번 평가합니다. 현재 Holter는 `P0002.npy` 한 파일의 forward smoke만 수행하며 학습·지표·평가 보고서를 만들지 않습니다. `evaluate_ecg_architectures.py`는 split에 등록된 모든 환자의 NPY를 cohort로 학습·평가하므로 현재 단일 환자 범위에서는 실행하지 않습니다. 임상과 Holter는 환자 집합과 입력 조건이 달라 같은 순위표로 합치지 않습니다.
 
 실행 도중 오류나 중단이 나면 시작 시 작성된 `report.md`가 `RUNNING` 상태로 남아 해당 폴더가 미완료 실행임을 표시합니다. 오류가 발생한 실행은 지표가 완성된 결과로 취급하지 않습니다.
 

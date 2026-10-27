@@ -33,7 +33,7 @@ def _read_split(path: Path) -> list[tuple[str, int]]:
     return output
 
 
-def _select_windows(
+def load_patient_windows(
     path: Path,
     *,
     windows_per_patient: int,
@@ -132,7 +132,7 @@ def load_holter_windows(
             if not path.is_file():
                 missing.append(patient_id)
                 continue
-            waveform, statistics, available_count, flat_leads = _select_windows(
+            waveform, statistics, available_count, flat_leads = load_patient_windows(
                 path,
                 windows_per_patient=windows_per_patient,
                 expected_leads=leads,
