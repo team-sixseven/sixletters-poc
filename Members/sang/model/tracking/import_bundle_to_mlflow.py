@@ -375,7 +375,7 @@ def import_bundle(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--bundle", type=Path, required=True, help="Local output from --tracking-output"
+        "--bundle", type=Path, required=True, help="Local bundle created by tracking/export_runs.py"
     )
     parser.add_argument("--experiment", default="sang-scd-model-comparison")
     parser.add_argument("--tracking-uri", default=os.environ.get("MLFLOW_TRACKING_URI"))
