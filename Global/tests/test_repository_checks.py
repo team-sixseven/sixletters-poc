@@ -58,7 +58,7 @@ def test_aggregate_csv_and_identifier_mentions_in_values_remain_trackable():
     assert (
         violations(
             Path("Global/reports/metrics.csv"),
-            b"model,patient_count,positive_count,auroc\nlogistic,144,14,0.65\n",
+            b"model,patient_count,positive_count,auroc\ncandidate_a,144,14,0.65\n",
         )
         == []
     )
@@ -130,7 +130,7 @@ def test_title_before_patient_header_is_rejected_even_without_known_id_values():
 @pytest.mark.parametrize(
     "filename,content",
     [
-        ("Global/reports/summary.csv", "model,patients,scd,auroc\nlogistic,144,14,0.65\n"),
+        ("Global/reports/summary.csv", "model,patients,scd,auroc\ncandidate_a,144,14,0.65\n"),
         ("Members/member/config.json", '{"seed": 42, "model": "xgboost"}'),
         ("Global/reports/summary.json", '{"patients": 144, "scd": 14, "auroc": 0.65}'),
         ("Global/reports/notes.txt", "A patient identifier such as P0001 is an example.\n"),

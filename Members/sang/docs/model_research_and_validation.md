@@ -35,7 +35,6 @@
 
 | 구분 | 모델 | Input → Output | 장점 | 제한 / 확인 사항 | 우선순위 |
 |---|---|---|---|---|---|
-| ML | Logistic Regression | `(N,F)` → `(N,)` 확률 | 빠른 학습, 해석 용이 | 선형 관계 중심 | 1차 |
 | ML | XGBoost | `(N,F)` → `(N,)` 확률 | 비선형 관계, SHAP 활용 가능 | 과적합·튜닝 점검 | 1차 |
 | ML | CatBoost | `(N,F)` → `(N,)` 확률 | 범주형 처리 지원 | 범주형 코드 정의 확인 | 1차 |
 | ML | Random Forest | `(N,F)` → `(N,)` 확률 | 안정적인 앙상블 비교 | 실제 데이터 결과 미측정 | 선택 |
@@ -72,7 +71,6 @@
 
 | 모델 | 더미 Input | 결과 | 실행 장치 / 실행 시간 |
 |---|---|---|---|
-| Logistic Regression | `(256,24)` | PASS | CPU / 0.022초 |
 | Random Forest | `(256,24)` | PASS | CPU / 0.167초 |
 | XGBoost | `(256,24)` | PASS | CPU / 1.016초 |
 | CatBoost | `(256,24)` | PASS | CPU / 0.108초; 범주형 입력 미시험 |
@@ -116,7 +114,6 @@ CUDA 검증은 GPU 장치 접근이 허용된 실행 환경에서 수행했다. 
 
 | 모델 | 입력 | AUROC ↑ | AUPRC/AP ↑ | Brier ↓ | 학습 시간 |
 |---|---|---:|---:|---:|---:|
-| Logistic Regression | Clinical 23 features | 0.771 | 0.260 | 0.111 | 0.052초 |
 | XGBoost | Clinical 23 features | 0.695 | 0.240 | 0.107 | 0.046초 |
 | CatBoost | Clinical 23 features | 0.733 | **0.390** | 0.095 | 0.177초 |
 | Random Forest | Clinical 23 features | **0.782** | 0.369 | **0.094** | 0.431초 |
@@ -157,7 +154,7 @@ Clinical와 Fusion AUROC는 각각 0.713, 0.718이나 Fusion AP는 0.186으로 C
 | 개발 가능성 | 일정, GPU 자원, 실제 입력 확보 |
 | 추가 검토 | Furiosa NPU 추론 호환성 |
 
-**현재 추천:** 정형 baseline은 Logistic Regression과 XGBoost를 유지하고 CatBoost를 비교군으로 둔다. ECG 파형 비교는 1D-CNN, CNN–LSTM, CNN–TST 순서를 권한다. ConvTran은 추가 시계열 baseline, Medformer/FormerTime은 후속 후보로 둔다. 환자 ID smoke 실행은 완료했으나 단일 환자로 임상 성능이나 최종 후보를 고를 수 없다. Transformer 후보 근거와 실데이터 실행 범위는 [별도 비교 보고서](transformer_ecg_model_comparison.md)에 기록했다. Random Forest는 더미 실행은 통과했으나 현재 실제 데이터 비교에는 포함되지 않았다.
+**현재 추천:** 정형 데이터는 XGBoost와 CatBoost를 비교한다. ECG 파형 비교는 1D-CNN, CNN–LSTM, CNN–TST 순서를 권한다. ConvTran은 추가 시계열 baseline, Medformer/FormerTime은 후속 후보로 둔다. 환자 ID smoke 실행은 완료했으나 단일 환자로 임상 성능이나 최종 후보를 고를 수 없다. Transformer 후보 근거와 실데이터 실행 범위는 [별도 비교 보고서](transformer_ecg_model_comparison.md)에 기록했다. Random Forest는 더미 실행은 통과했으나 현재 실제 데이터 비교에는 포함되지 않았다.
 
 ## 7. 미확정 사항 및 다음 작업
 

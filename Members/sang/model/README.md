@@ -4,40 +4,56 @@
 
 ```text
 model/
-├── ECG+clinical_experiment.ipynb
-├── ML/
-│   ├── dataloader/       # clinical_clean.csv와 split ID loader
-│   ├── data/             # 데이터 복사본 없이 안내 파일만 보관
-│   ├── models.py         # 임상 3개 후보 팩토리와 공통 전처리
-│   ├── model_experiment_only_ML.ipynb
-│   ├── model_choice.yaml
-│   └── {Logistic_Regression,xgboost,catboost}/
-├── DL/
-│   ├── dataloader/
-│   ├── data/
-│   ├── model_experiment_only_DL.ipynb
-│   ├── model_choice.yaml
-│   ├── training.yaml
-│   ├── CNN/
-│   ├── LSTM/
-│   ├── Transformer/
-│   └── Segment_MIL/      # 환자 구간 통계 기반 attention/TCN MIL
-├── evaluation/
-│   ├── evaluation_experiment.ipynb
-│   ├── ML/                 # clinical 평가 및 결과 재계산
-│   ├── DL/                 # Holter 평가 및 validation threshold 선택
-│   ├── evaluate_predictions.py
-│   └── evaluation_choice.yaml
-└── tracking/
-    ├── bundle.py
-    ├── import_bundle_to_mlflow.py
-    ├── handoff.yaml
-    └── MLFLOW_HANDOFF.md
+├── DL/                                  # ECG 딥러닝 모델과 학습 설정
+│   ├── CNN/                             # CNN 계열
+│   ├── LSTM/                            # LSTM 계열
+│   ├── Segment_MIL/                     # ECG 구간 집계 모델
+│   ├── Transformer/                     # Transformer 계열
+│   ├── data/                            # 데이터 경로·형식 안내
+│   ├── dataloader/                      # ECG 로딩·전처리
+│   ├── model_choice.yaml                # 평가 모델과 입력 설정
+│   ├── model_experiment_only_DL.ipynb   # DL 실험 노트북
+│   ├── models.py                        # DL 네트워크 정의
+│   └── training.yaml                    # 공통 학습 설정
+├── ECG+clinical_experiment.ipynb        # ECG·임상 통합 실험 노트북
+├── ML/                                  # 임상 데이터 머신러닝 모델과 설정
+│   ├── __pycache__/                     # Python 임시 캐시
+│   ├── catboost/                        # CatBoost 모델
+│   ├── data/                            # 데이터 경로·형식 안내
+│   ├── dataloader/                      # 임상 CSV·split 로딩
+│   ├── model_choice.yaml                # 평가 모델·feature 설정
+│   ├── model_experiment_only_ML.ipynb   # ML 실험 노트북
+│   ├── models.py                        # 모델 생성·공통 전처리
+│   └── xgboost/                         # XGBoost 모델
+├── README.md                            # model 디렉터리 안내
+├── __pycache__/                         # Python 임시 캐시
+├── config.py                            # YAML 설정·경로 처리
+├── evaluation/                          # 예측 평가와 보고서 생성
+│   ├── DL/                              # ECG 평가 지표
+│   ├── ML/                              # 임상 평가 지표
+│   ├── README.md                        # 평가 모듈 안내
+│   ├── __init__.py                      # Python 패키지 표시
+│   ├── __pycache__/                     # Python 임시 캐시
+│   ├── core.py                          # 공통 평가 로직
+│   ├── evaluate_predictions.py          # 저장된 예측 재평가
+│   ├── evaluation_choice.yaml           # 평가 설정
+│   ├── evaluation_experiment.ipynb      # 평가 노트북
+│   └── reporting.py                     # 결과 보고서 생성
+├── outputs/                             # 로컬 실행 결과
+│   ├── evaluation/                      # 평가 보고서·결과 JSON
+│   └── handoff/                         # MLflow 전달 bundle
+└── tracking/                            # 결과 bundle 생성·MLflow 등록
+    ├── MLFLOW_HANDOFF.md                # MLflow 담당자 안내
+    ├── __init__.py                      # Python 패키지 표시
+    ├── __pycache__/                     # Python 임시 캐시
+    ├── bundle.py                        # 결과 bundle 생성
+    ├── handoff.yaml                     # bundle 계약·파일 정책
+    └── import_bundle_to_mlflow.py       # bundle 검증·MLflow 업로드
 ```
 
 ## 실행 기준
 
-- 임상 모델의 실제 구현은 `../scripts/evaluate_preprocessed_clinical.py`이며 사진에 지정된 Logistic Regression, XGBoost, CatBoost를 같은 환자 분할에서 비교합니다.
+- 임상 모델의 실제 구현은 `../scripts/evaluate_preprocessed_clinical.py`이며 XGBoost와 CatBoost를 같은 환자 분할에서 비교합니다.
 - 임상 feature 입력은 `../datas/clincal/clinical_clean.csv`, split membership은 `../datas/clincal/splits/{train,val,test}.csv`입니다. 모델 팩토리는 `ML/models.py`, loader는 `ML/dataloader/clinical.py`, 비교 runner는 `../scripts/evaluate_preprocessed_clinical.py`입니다.
 - Holter 모델의 실제 구현은 `../scripts/evaluate_ecg_architectures.py`, 모델 정의는 `DL/models.py`입니다. 파형 입력은 `../datas/Holter/windows/Pxxxx.npy` 환자별 파일입니다.
 - NPY windows loader는 `DL/dataloader/holter_windows.py`입니다. `(N_windows,3,2000)`에서 환자별 8개 window를 기록 전체에 균등하게 골라 `(N,8,3,2000)`으로 구성합니다.

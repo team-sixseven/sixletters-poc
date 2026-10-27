@@ -4,11 +4,13 @@
 데이터 경로: `Members/sang/datas/clincal/`
 실행 코드: [`evaluate_preprocessed_clinical.py`](../scripts/evaluate_preprocessed_clinical.py)
 
+아래 표는 당시 Random Forest, XGBoost, CatBoost, MLP를 비교한 과거 실행 결과다. 현재 평가 설정에서는 XGBoost와 CatBoost만 비교한다. 과거 수치는 이력으로 보존하며 현재 후보 결과로 해석하지 않는다.
+
 이 임상 모델 평가는 2026-10-23 시점의 실행이다. 이후 환자 ID raw ECG 한 쌍을 확보해 단일 환자 smoke test를 수행했으나, 아래 임상 성능 결과나 ECG 코호트 성능으로 합치지 않았다. [Transformer 후보 실제 데이터 비교](transformer_ecg_model_comparison.md)를 참고한다.
 
 ## 요약
 
-전처리된 환자 단위 train/validation/test split으로 실제 비교가 가능한 정형 모델 5개(Logistic Regression, Random Forest, XGBoost, CatBoost, MLP)를 학습했다. Validation AUPRC(Average Precision)를 우선 기준으로 보면 CatBoost가 가장 높았고, 선택된 CatBoost를 train+validation으로 다시 학습해 held-out test에서 한 번 평가했다.
+전처리된 환자 단위 train/validation/test split으로 실제 비교가 가능한 정형 모델 4개(Random Forest, XGBoost, CatBoost, MLP)를 학습했다. Validation AUPRC(Average Precision)를 우선 기준으로 보면 CatBoost가 가장 높았고, 선택된 CatBoost를 train+validation으로 다시 학습해 held-out test에서 한 번 평가했다.
 
 **현재 추천:** 다음 반복 실험의 우선 후보는 **CatBoost**, 비교 challenger는 **Random Forest**다. CatBoost가 validation AP와 선택 후 test AP에서 앞섰다. Random Forest는 validation AUROC와 Brier가 근소하게 더 좋았다. validation/test 각각 SCD 양성이 10명뿐인 단일 분할이라 확정적인 모델 우열 또는 임상 효용으로 해석하면 안 된다.
 
@@ -36,7 +38,7 @@
 - 모든 모델은 같은 train 386명으로 학습하고 validation 83명에서 비교했다. test는 validation AP가 가장 높은 모델 선택 후 그 모델만 한 번 평가했다.
 - `Patient ID`는 입력에서 제외했다. feature 전처리기는 train에만 fit했다.
 - 범주형으로 처리한 7개 변수: `NYHA class`, `Right ventricle contractility (altered=1)`, `Mitral valve insufficiency `, `Diabetes (yes=1)`, `Prior Myocardial Infarction (yes=1)`, `Gender (male=1)`, `Ischemic etiology`. 데이터 dictionary가 없어 열 이름과 관측 코드에 기반해 분류한 실험 가정이다.
-- Logistic Regression, Random Forest, XGBoost, MLP는 범주형 one-hot, 연속형 median imputation 및 scaling을 사용했다. 이번 파일에는 결측이 없어 대치 동작은 데이터상 필요하지 않았지만, 전처리 pipeline에는 포함했다.
+- Random Forest, XGBoost, MLP는 범주형 one-hot, 연속형 median imputation 및 scaling을 사용했다. 이번 파일에는 결측이 없어 대치 동작은 데이터상 필요하지 않았지만, 전처리 pipeline에는 포함했다.
 - CatBoost는 위 범주 열을 native categorical로 지정했다.
 - 모델별 설정은 고정 seed 42의 작은 baseline 설정이며 하이퍼파라미터 탐색·교차검증은 하지 않았다.
 - AUPRC는 Average Precision으로 계산했다. 학습 시간은 CPU 단회 `fit` 시간이다.
@@ -50,7 +52,6 @@ Validation: N=83, SCD=10. 정렬은 AP 내림차순이다.
 | **CatBoost** | 0.733 | **0.390** | 0.095 | 0.177초 | AP 1위; 범주형 native 처리 |
 | Random Forest | **0.782** | 0.369 | **0.094** | 0.431초 | AUROC 1위, Brier 최저 |
 | MLP | 0.708 | 0.269 | 0.127 | 0.545초 | 현재 고정 구조에서 비교 |
-| Logistic Regression | 0.771 | 0.260 | 0.111 | 0.052초 | 가장 빠른 baseline |
 | XGBoost | 0.695 | 0.240 | 0.107 | 0.046초 | 고정 기본 설정 |
 
 ## 4. 단일 held-out test 결과
@@ -78,7 +79,6 @@ test 지표는 모델 선택이나 파라미터 조정에 사용하지 않았다
 
 | 케이스 | 입력 데이터 | 중요도 | 모델 구분 | 모델 | 담당 | 상태 | ROC-AUC | PR-AUC (AP) | Sensitivity* | Specificity* | Brier | MLflow 링크 | 메모 |
 |---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---|---|
-| C1 임상 – Logistic Regression | 임상 | 해당 없음 | ML | Logistic Regression | 남상기 | 완료 | 0.771 | 0.260 | 0.100 | 0.973 | 0.111 | — | 23 features; validation N=83/SCD=10; train 386/SCD=46; fit 0.189초 |
 | C1 임상 – Random Forest | 임상 | 해당 없음 | ML | Random Forest | 남상기 | 완료 | 0.782 | 0.369 | 0.000 | 1.000 | 0.094 | — | 23 features; validation N=83/SCD=10; train 386/SCD=46; fit 0.421초 |
 | C1 임상 – XGBoost | 임상 | 해당 없음 | ML | XGBoost | 남상기 | 완료 | 0.695 | 0.240 | 0.100 | 0.973 | 0.107 | — | 23 features; validation N=83/SCD=10; train 386/SCD=46; fit 0.080초 |
 | C1 임상 – CatBoost | 임상 | 해당 없음 | ML | CatBoost | 남상기 | 완료 | 0.733 | 0.390 | 0.100 | 1.000 | 0.095 | — | 23 features; validation N=83/SCD=10; train 386/SCD=46; validation AP 기준 선택. Test N=83/SCD=10: AUC 0.781, AP 0.335, sensitivity 0.000, specificity 0.986, Brier 0.094 |
@@ -92,7 +92,6 @@ ECG 시계열/파형의 성능 실험은 다수 환자 입력이 없어 미실�
 
 | 모델 | 실제 임상 split으로 평가 | 상태 |
 |---|---|---|
-| Logistic Regression | 가능 | Validation 결과 기록 |
 | Random Forest | 가능 | Validation 결과 기록 |
 | XGBoost | 가능 | Validation 결과 기록 |
 | CatBoost | 가능 | Validation + 선택 후 test 결과 기록 |

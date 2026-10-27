@@ -29,7 +29,6 @@ data_loader: Members/sang/model/ML/dataloader/clinical.py
 selection_metric: validation_average_precision
 threshold_strategy: validation_youden_j
 models:
-  - Logistic Regression
   - XGBoost
   - CatBoost
-notes: "사진의 임상 모델 목록에 있는 세 모델만 비교. Feature 수는 CSV에서 다시 계산됨."
+notes: "현재 임상 비교 후보는 XGBoost와 CatBoost. Feature 수는 CSV에서 다시 계산됨."
