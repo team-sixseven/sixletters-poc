@@ -1,3 +1,3 @@
 # XGBoost
 
-임상 비교에서 사용하는 XGBoost factory와 기본 파라미터는 [`../models.py`](../models.py)에 있습니다. 공통 비교는 `../../scripts/evaluate_preprocessed_clinical.py`로 실행합니다.
+XGBoost estimator 설정은 [`parameter.yaml`](parameter.yaml)에 있고, 공통 trainer가 train-only 전처리·validation AP early stopping·artifact 저장을 처리합니다. 후보 선택은 [`model_choice.yaml`](../model_choice.yaml)에서 관리합니다.

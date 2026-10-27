@@ -1,43 +1,36 @@
-"""Clinical tabular model factories and their shared preprocessing schema."""
+"""Configured clinical estimator and train-fitted preprocessing factories."""
 
 from __future__ import annotations
 
-from pathlib import Path
+import inspect
+from typing import Any
 
+import pandas as pd
 from catboost import CatBoostClassifier
 from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from xgboost import XGBClassifier
 
-from ..config import load_yaml
 
-CLINICAL_CHOICE_PATH = Path(__file__).parent / "model_choice.yaml"
-
-
-def clinical_choice() -> dict:
-    return load_yaml(CLINICAL_CHOICE_PATH)
-
-
-CATEGORICAL_FEATURES = tuple(clinical_choice()["categorical_features"])
-
-
-def make_preprocessor(features: list[str], config: dict | None = None) -> ColumnTransformer:
-    config = config or clinical_choice()["preprocessing"]
-    categorical = [name for name in CATEGORICAL_FEATURES if name in features]
+def make_preprocessor(
+    features: list[str], categorical_features: list[str], config: dict[str, Any]
+) -> ColumnTransformer:
+    categorical = [name for name in categorical_features if name in features]
     numeric = [name for name in features if name not in categorical]
     if config["categorical_encoding"] != "one_hot":
-        raise ValueError("Only one_hot categorical encoding is currently supported")
+        raise ValueError("Only preprocessing.categorical_encoding=one_hot is supported")
     if config["numeric_scaling"] != "standard":
-        raise ValueError("Only standard numeric scaling is currently supported")
+        raise ValueError("Only preprocessing.numeric_scaling=standard is supported")
     return ColumnTransformer(
         [
             (
                 "numeric",
                 make_pipeline(
-                    SimpleImputer(strategy=config["numeric_imputation"]),
-                    StandardScaler(with_mean=config["numeric_scaling"] == "standard"),
+                    SimpleImputer(strategy=config["numeric_imputation"], keep_empty_features=True),
+                    StandardScaler(),
                 ),
                 numeric,
             ),
@@ -54,56 +47,36 @@ def make_preprocessor(features: list[str], config: dict | None = None) -> Column
             ),
         ],
         remainder="drop",
+        verbose_feature_names_out=True,
     )
 
 
-MODEL_CONFIGS = {
-    "XGBoost": Path(__file__).parent / "xgboost/parameter.yaml",
-    "CatBoost": Path(__file__).parent / "catboost/parameter.yaml",
-}
+def prepare_categorical_frame(
+    frame: pd.DataFrame, categorical_features: list[str], missing_value: str
+) -> pd.DataFrame:
+    prepared = frame.copy()
+    for name in categorical_features:
+        if name in prepared:
+            prepared[name] = prepared[name].astype("string").fillna(missing_value).astype(str)
+    return prepared
 
 
-def build_models(
-    features: list[str],
-    model_names: list[str] | None = None,
-    preprocessing: dict | None = None,
-) -> dict[str, object]:
-    """Create configured clinical candidates; preprocessors fit only on training data."""
-    names = model_names or list(MODEL_CONFIGS)
-    unknown = set(names) - set(MODEL_CONFIGS)
+def build_estimator(name: str, parameters: dict[str, Any]):
+    if name == "XGBoost":
+        estimator = XGBClassifier()
+        supported = set(estimator.get_params(deep=False))
+    elif name == "CatBoost":
+        estimator = CatBoostClassifier()
+        supported = set(inspect.signature(CatBoostClassifier.__init__).parameters) - {"self"}
+    elif name == "Random Forest":
+        estimator = RandomForestClassifier()
+        supported = set(estimator.get_params(deep=False))
+    else:
+        raise ValueError(
+            f"Unsupported clinical model {name!r}; supported: XGBoost, CatBoost, Random Forest"
+        )
+    unknown = sorted(set(parameters) - supported)
     if unknown:
-        raise ValueError(f"Unknown clinical models in config: {sorted(unknown)}")
-    models = {}
-    for name in names:
-        params = load_yaml(MODEL_CONFIGS[name])
-        preprocessor = make_preprocessor(features, preprocessing)
-        if name == "XGBoost":
-            estimator = XGBClassifier(
-                n_estimators=params["n_estimators"],
-                max_depth=params["max_depth"],
-                learning_rate=params["learning_rate"],
-                n_jobs=params["n_jobs"],
-                tree_method=params["tree_method"],
-                eval_metric=params["eval_metric"],
-                random_state=params["random_state"],
-                verbosity=params["verbosity"],
-            )
-            models[name] = make_pipeline(preprocessor, estimator)
-        else:
-            models[name] = CatBoostClassifier(
-                iterations=params["iterations"],
-                depth=params["depth"],
-                learning_rate=params["learning_rate"],
-                random_seed=params["random_seed"],
-                verbose=params["verbose"],
-                thread_count=params["thread_count"],
-                allow_writing_files=params["allow_writing_files"],
-            )
-    return models
-
-
-def build_model(name: str, features: list[str]):
-    try:
-        return build_models(features, [name])[name]
-    except KeyError as error:
-        raise ValueError(f"Unknown clinical model: {name}") from error
+        raise ValueError(f"{name} parameter YAML has unsupported model keys: {unknown}")
+    estimator.set_params(**parameters)
+    return estimator

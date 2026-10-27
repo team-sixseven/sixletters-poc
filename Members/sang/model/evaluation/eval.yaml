@@ -1,0 +1,18 @@
+basic_config: ../basic.yaml
+evaluation:
+  target: fusion
+  fusion_config: ../fusion.yaml
+  artifact_dir: ../ML/models/choose_ml_run
+  split: test
+  threshold_override: null
+  results_directory: results
+  metrics:
+    - auroc
+    - average_precision
+    - accuracy
+    - precision
+    - recall
+    - sensitivity
+    - specificity
+    - f1
+    - confusion_matrix

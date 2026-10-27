@@ -1,9 +1,14 @@
-# Loaded by model/ML/models.py.
-iterations: 100
-depth: 4
-learning_rate: 0.05
-random_seed: 42
-verbose: false
-thread_count: 1
-allow_writing_files: false
-# Loaded by model/ML/models.py.
+# CatBoost candidate and training settings. Threshold is not an estimator parameter.
+model:
+  iterations: 500
+  depth: 4
+  learning_rate: 0.03
+  random_seed: 42
+  verbose: false
+  thread_count: 1
+  allow_writing_files: false
+training:
+  early_stopping_rounds: 30
+  seed: 42
+classification:
+  threshold: 0.5

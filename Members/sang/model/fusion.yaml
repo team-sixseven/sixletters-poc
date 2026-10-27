@@ -1,0 +1,22 @@
+basic_config: basic.yaml
+ml:
+  artifact_dir: ML/models/choose_ml_run
+dl:
+  artifact_dir: DL/models/choose_dl_run
+fusion:
+  mode: manual
+  saved_run_dir: null
+  weights:
+    ml: 0.5
+    dl: 0.5
+  learning:
+    split: validation
+    objective: binary_cross_entropy
+    parameterization: two_class_softmax
+    optimizer: LBFGS
+    max_iterations: 100
+    tolerance_grad: 1.0e-9
+classification:
+  threshold: 0.5
+missing_prediction_policy: intersection_and_report
+results_directory: evaluation/results/fusion

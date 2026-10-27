@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2050 600" role="img" aria-labelledby="title desc">
+  <title id="title">Clinical ML model flow</title>
+  <desc id="desc">Clinical features and patient splits flow through model-specific preprocessing and estimator branches. Candidate runs are compared by validation average precision before test evaluation.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#222"/></marker>
+    <style>
+      text { font-family: Inter, "Noto Sans KR", Arial, sans-serif; fill:#171717; }
+      .title { font-size:25px; font-weight:700; }
+      .head { font-size:18px; font-weight:600; }
+      .body { font-size:15px; }
+      .small { font-size:13px; fill:#555; }
+      .box { fill:#fff; stroke:#222; stroke-width:2.2; }
+      .line { fill:none; stroke:#222; stroke-width:2.2; marker-end:url(#arrow); }
+      .plain { fill:none; stroke:#222; stroke-width:2.2; }
+    </style>
+  </defs>
+  <rect x="12" y="12" width="2026" height="576" rx="4" fill="#fff" stroke="#d3d3d3" stroke-width="4" stroke-dasharray="14 9"/>
+  <text x="36" y="48" class="title">Clinical only · ML</text>
+  <text x="36" y="72" class="small">basic.yaml: configured features · model_choice.yaml selects candidate branch(es)</text>
+
+  <rect x="35" y="224" width="190" height="112" class="box" stroke="#4d78a8"/>
+  <text x="130" y="260" text-anchor="middle" class="head">Clinical CSV</text>
+  <text x="130" y="287" text-anchor="middle" class="body">features [N,F]</text>
+  <text x="130" y="313" text-anchor="middle" class="small">SCD + split CSV</text>
+
+  <line x1="225" y1="280" x2="264" y2="280" class="line"/>
+  <rect x="272" y="224" width="195" height="112" class="box" stroke="#777"/>
+  <text x="369" y="260" text-anchor="middle" class="head">Patient ID join</text>
+  <text x="369" y="288" text-anchor="middle" class="body">train / validation / test</text>
+  <text x="369" y="313" text-anchor="middle" class="small">patient-level split</text>
+
+  <path d="M467 280 H495 V160 H524" class="line"/>
+  <path d="M495 280 V295 H524" class="line"/>
+  <path d="M495 280 V430 H524" class="line"/>
+
+  <rect x="532" y="115" width="255" height="90" class="box" stroke="#4b8b65"/>
+  <text x="659" y="148" text-anchor="middle" class="head">Preprocess</text>
+  <text x="659" y="176" text-anchor="middle" class="body">impute · scale · one-hot</text>
+  <text x="659" y="195" text-anchor="middle" class="small">fit on train only</text>
+  <rect x="532" y="250" width="255" height="90" class="box" stroke="#8866a8"/>
+  <text x="659" y="283" text-anchor="middle" class="head">CatBoost input</text>
+  <text x="659" y="311" text-anchor="middle" class="body">categorical → strings</text>
+  <text x="659" y="330" text-anchor="middle" class="small">native categorical features</text>
+  <rect x="532" y="385" width="255" height="90" class="box" stroke="#4b8b65"/>
+  <text x="659" y="418" text-anchor="middle" class="head">Preprocess</text>
+  <text x="659" y="446" text-anchor="middle" class="body">impute · scale · one-hot</text>
+  <text x="659" y="465" text-anchor="middle" class="small">fit on train only</text>
+
+  <line x1="787" y1="160" x2="824" y2="160" class="line"/>
+  <line x1="787" y1="295" x2="824" y2="295" class="line"/>
+  <line x1="787" y1="430" x2="824" y2="430" class="line"/>
+
+  <rect x="832" y="115" width="225" height="90" class="box" stroke="#4b8b65"/>
+  <text x="944" y="149" text-anchor="middle" class="head">XGBoost</text>
+  <text x="944" y="178" text-anchor="middle" class="body">tree ensemble</text>
+  <text x="944" y="197" text-anchor="middle" class="small">best iteration by val AP</text>
+  <rect x="832" y="250" width="225" height="90" class="box" stroke="#8866a8"/>
+  <text x="944" y="284" text-anchor="middle" class="head">CatBoost</text>
+  <text x="944" y="313" text-anchor="middle" class="body">categorical tree ensemble</text>
+  <text x="944" y="332" text-anchor="middle" class="small">best iteration by val AP</text>
+  <rect x="832" y="385" width="225" height="90" class="box" stroke="#4b8b65"/>
+  <text x="944" y="419" text-anchor="middle" class="head">Random Forest</text>
+  <text x="944" y="448" text-anchor="middle" class="body">fixed tree count</text>
+  <text x="944" y="467" text-anchor="middle" class="small">validation AP recorded</text>
+
+  <line x1="1057" y1="160" x2="1094" y2="160" class="line"/>
+  <line x1="1057" y1="295" x2="1094" y2="295" class="line"/>
+  <line x1="1057" y1="430" x2="1094" y2="430" class="line"/>
+  <rect x="1102" y="115" width="190" height="90" class="box" stroke="#777"/>
+  <text x="1197" y="151" text-anchor="middle" class="head">Candidate run</text>
+  <text x="1197" y="180" text-anchor="middle" class="body">model + val results</text>
+  <rect x="1102" y="250" width="190" height="90" class="box" stroke="#777"/>
+  <text x="1197" y="286" text-anchor="middle" class="head">Candidate run</text>
+  <text x="1197" y="315" text-anchor="middle" class="body">model + val results</text>
+  <rect x="1102" y="385" width="190" height="90" class="box" stroke="#777"/>
+  <text x="1197" y="421" text-anchor="middle" class="head">Candidate run</text>
+  <text x="1197" y="450" text-anchor="middle" class="body">model + val results</text>
+
+  <path d="M1292 160 H1321 V295 H1345" class="line"/>
+  <path d="M1292 295 H1345" class="line"/>
+  <path d="M1292 430 H1321 V295 H1345" class="line"/>
+  <rect x="1353" y="240" width="215" height="110" class="box" stroke="#d49a00"/>
+  <text x="1460" y="276" text-anchor="middle" class="head">Compare val AP</text>
+  <text x="1460" y="306" text-anchor="middle" class="body">choose run manually</text>
+  <text x="1460" y="332" text-anchor="middle" class="small">no automatic winner</text>
+
+  <line x1="1568" y1="295" x2="1604" y2="295" class="line"/>
+  <rect x="1612" y="240" width="185" height="110" class="box" stroke="#c35b5b"/>
+  <text x="1704" y="276" text-anchor="middle" class="head">Test</text>
+  <text x="1704" y="306" text-anchor="middle" class="body">final evaluation</text>
+  <text x="1704" y="332" text-anchor="middle" class="small">fixed model + threshold</text>
+
+  <line x1="1797" y1="295" x2="1833" y2="295" class="line"/>
+  <rect x="1841" y="240" width="165" height="110" class="box" stroke="#4b8b65"/>
+  <text x="1923" y="276" text-anchor="middle" class="head">Results</text>
+  <text x="1923" y="306" text-anchor="middle" class="body">metrics</text>
+  <text x="1923" y="332" text-anchor="middle" class="small">predictions</text>
+
+  <text x="36" y="530" class="small">XGBoost / Random Forest: train-fit preprocessing · CatBoost: categorical strings · test 결과로 후보나 threshold를 조정하지 않음</text>
+</svg>

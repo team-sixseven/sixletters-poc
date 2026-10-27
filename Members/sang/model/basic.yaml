@@ -1,0 +1,72 @@
+# Common data schema. Relative paths resolve from this file's directory.
+data:
+  clinical:
+    path: ../datas/clincal/clinical_clean.csv
+    id_column: Patient ID
+    label_column: SCD
+    id_type: string
+    normalize_column_whitespace: true
+    feature_columns:
+      - cigarettes /year
+      - alcohol consumption (standard units)
+      - NYHA class
+      - Systolic blood pressure (mmHg)
+      - Diastolic blood  pressure (mmHg)
+      - LVEF (%)
+      - Left atrial size (mm)
+      - Left ventricle end-diastolic diameter (mm)
+      - Left ventricle end-systolic diameter (mm)
+      - Left ventricular posterior wall thickness (mm)
+      - Septal thickness (mm)
+      - Right ventricle contractility (altered=1)
+      - Right ventricle end-diastolic diameter (mm)
+      - Mitral valve insufficiency
+      - Diabetes (yes=1)
+      - Prior Myocardial Infarction (yes=1)
+      - Age
+      - Gender (male=1)
+      - Albumin (g/L)
+      - Pro-BNP (ng/L)
+      - Cardiothoracic ratio
+      - eGFR
+      - Ischemic etiology
+    categorical_features:
+      - NYHA class
+      - Right ventricle contractility (altered=1)
+      - Mitral valve insufficiency
+      - Diabetes (yes=1)
+      - Prior Myocardial Infarction (yes=1)
+      - Gender (male=1)
+      - Ischemic etiology
+    target_semantics: "Provided binary SCD label; prediction time and horizon are not specified in the local data dictionary."
+  split:
+    path: ../datas/clincal/split_team_v1.csv
+    id_column: pid
+    split_column: split
+    values:
+      train: train
+      validation: validation
+      test: test
+  ecg:
+    directory: ../datas/Holter/windows
+    filename_pattern: "{pid}.npy"
+    patient_id_regex: "^(P[0-9]{4})$"
+    metadata_path: ../datas/Holter/index/windows.csv.gz
+    metadata_id_column: pid
+    metadata_row_column: row
+    metadata_time_column: start_sec
+    metadata_quality_column: sqi_pass
+    sample_rate_hz: 200
+    sample_rate_status: assumed_from_source_recording_spec
+    array_layout: [window, lead, sample]
+    leads: 3
+    samples_per_window: 2000
+    stored_dtype: float16
+    model_dtype: float32
+    windows_per_patient: 8
+    window_selection: evenly_spaced_chronological
+    normalization: per_window_per_lead_zscore
+    quality_filter: sqi_pass_only
+    missing_policy: exclude_from_modality_and_report
+outputs:
+  audit_directory: reports/data_audit

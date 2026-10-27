@@ -75,9 +75,12 @@ class ResNetECG(nn.Module):
         layers.extend(_ResidualBlock1D(out_channels, out_channels) for _ in range(count - 1))
         return nn.Sequential(*layers)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
         x = self.layer2(self.layer1(self.stem(x)))
-        return self.classifier(self.pool(x).squeeze(-1))
+        return self.pool(x).squeeze(-1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.classifier(self.forward_features(x))
 
 
 class _InceptionModule1D(nn.Module):
@@ -126,8 +129,11 @@ class InceptionTimeECG(nn.Module):
         self.pool = nn.AdaptiveAvgPool1d(1)
         self.classifier = nn.Linear(filters * 4, 1)
 
+    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
+        return self.pool(self.features(x)).squeeze(-1)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.classifier(self.pool(self.features(x)).squeeze(-1))
+        return self.classifier(self.forward_features(x))
 
 
 class _Chomp1d(nn.Module):
@@ -181,8 +187,11 @@ class TCNECG(nn.Module):
         self.pool = nn.AdaptiveAvgPool1d(1)
         self.classifier = nn.Linear(hidden_dim, 1)
 
+    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
+        return self.pool(self.features(x)).squeeze(-1)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.classifier(self.pool(self.features(x)).squeeze(-1))
+        return self.classifier(self.forward_features(x))
 
 
 class ECGTransformer(nn.Module):

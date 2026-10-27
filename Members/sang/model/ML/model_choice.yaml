@@ -1,21 +1,14 @@
-# 비교 실행은 선택 모델 하나에 한정하지 않고 전체 후보를 공통 조건으로 평가합니다.
-task: patient_level_scd_classification
-input: clinical
-clinical_csv: Members/sang/datas/clincal/clinical_clean.csv
-splits_dir: Members/sang/datas/clincal/splits
-patient_id_column: Patient ID
-target_column: SCD
-feature_selection: all_columns_except_patient_id_and_scd
-feature_count_observed: 23
-split_files: [train.csv, val.csv, test.csv]
-categorical_features:
-  - NYHA class
-  - Right ventricle contractility (altered=1)
-  - Mitral valve insufficiency
-  - Diabetes (yes=1)
-  - Prior Myocardial Infarction (yes=1)
-  - Gender (male=1)
-  - Ischemic etiology
+basic_config: ../basic.yaml
+models:
+  - XGBoost
+  - CatBoost
+  - Random Forest
+model_configs:
+  XGBoost: xgboost/parameter.yaml
+  CatBoost: catboost/parameter.yaml
+  Random Forest: random_forest/parameter.yaml
+model_output_dir: models
+feature_columns: all_configured_clinical_features
 preprocessing:
   numeric_imputation: median
   numeric_scaling: standard
@@ -23,12 +16,8 @@ preprocessing:
   categorical_missing_value: __MISSING__
   categorical_encoding: one_hot
   unknown_category: ignore
-runner: Members/sang/scripts/evaluate_preprocessed_clinical.py
-model_factory: Members/sang/model/ML/models.py
-data_loader: Members/sang/model/ML/dataloader/clinical.py
-selection_metric: validation_average_precision
-threshold_strategy: validation_youden_j
-models:
-  - XGBoost
-  - CatBoost
-notes: "임상 후보는 XGBoost와 CatBoost. Feature 수는 CSV에서 다시 계산됨."
+selection:
+  metric: average_precision
+  direction: maximize
+  threshold_metric: f1
+  early_stopping: true

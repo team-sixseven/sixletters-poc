@@ -1,7 +1,14 @@
-"""CatBoost candidate factory for the common clinical comparison."""
+"""CatBoost estimator factory backed by the adjacent parameter YAML."""
 
-from Members.sang.model.ML.models import build_model as _build_model
+from pathlib import Path
+
+from ...config import load_yaml
+from ..models import build_estimator
 
 
-def build_model(features: list[str]):
-    return _build_model("CatBoost", features)
+def build_model(parameters: dict | None = None):
+    """Build the configured CatBoost estimator, allowing explicit overrides."""
+    settings = parameters
+    if settings is None:
+        settings = load_yaml(Path(__file__).with_name("parameter.yaml"))["model"]
+    return build_estimator("CatBoost", settings)

@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 import numpy as np
-from evaluate_actual_clinical import make_preprocessor
+from Members.sang.model.ML.models import make_preprocessor
 from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
 from sklearn.pipeline import make_pipeline
 from xgboost import XGBClassifier
@@ -49,9 +49,19 @@ def main() -> int:
     rows = []
     for name, features in feature_sets.items():
         categorical = [c for c in dataset.categorical_features if c in features]
-        numeric = [c for c in features if c not in categorical]
         model = make_pipeline(
-            make_preprocessor(numeric, categorical),
+            make_preprocessor(
+                features,
+                categorical,
+                {
+                    "categorical_encoding": "one_hot",
+                    "numeric_scaling": "standard",
+                    "numeric_imputation": "median",
+                    "categorical_imputation": "constant",
+                    "categorical_missing_value": "__MISSING__",
+                    "unknown_category": "ignore",
+                },
+            ),
             XGBClassifier(
                 n_estimators=100,
                 max_depth=3,

@@ -1,67 +1,102 @@
-# SCD 모델 실험 구조
+# SCD model workflow
 
-이 디렉터리는 실험 진입점과 모델 설정을 데이터 종류별로 정리합니다. 기존 학습·평가 구현과 데이터는 복제하지 않습니다.
+This directory provides one configuration-driven workflow for clinical ML, Holter DL, saved-model fusion, and evaluation. Notebooks call the same Python modules as the command line. Data files are read-only; generated models, audits, and predictions stay local.
 
 ```text
 model/
-├── DL/                                  # ECG 딥러닝 모델과 학습 설정
-│   ├── CNN/                             # CNN 계열
-│   ├── LSTM/                            # LSTM 계열
-│   ├── Segment_MIL/                     # ECG 구간 집계 모델
-│   ├── Transformer/                     # Transformer 계열
-│   ├── data/                            # 데이터 경로·형식 안내
-│   ├── dataloader/                      # ECG 로딩·전처리
-│   ├── model_choice.yaml                # 평가 모델과 입력 설정
-│   ├── model_experiment_only_DL.ipynb   # DL 실험 노트북
-│   ├── models.py                        # DL 네트워크 정의
-│   └── training.yaml                    # 공통 학습 설정
-├── ECG+clinical_experiment.ipynb        # ECG·임상 통합 실험 노트북
-├── ML/                                  # 임상 데이터 머신러닝 모델과 설정
-│   ├── __pycache__/                     # Python 임시 캐시
-│   ├── catboost/                        # CatBoost 모델
-│   ├── data/                            # 데이터 경로·형식 안내
-│   ├── dataloader/                      # 임상 CSV·split 로딩
-│   ├── model_choice.yaml                # 평가 모델·feature 설정
-│   ├── model_experiment_only_ML.ipynb   # ML 실험 노트북
-│   ├── models.py                        # 모델 생성·공통 전처리
-│   └── xgboost/                         # XGBoost 모델
-├── README.md                            # model 디렉터리 안내
-├── __pycache__/                         # Python 임시 캐시
-├── config.py                            # YAML 설정·경로 처리
-├── evaluation/                          # 예측 평가와 보고서 생성
-│   ├── DL/                              # ECG 평가 지표
-│   ├── ML/                              # 임상 평가 지표
-│   ├── README.md                        # 평가 모듈 안내
-│   ├── __init__.py                      # Python 패키지 표시
-│   ├── __pycache__/                     # Python 임시 캐시
-│   ├── core.py                          # 공통 평가 로직
-│   ├── evaluate_predictions.py          # 저장된 예측 재평가
-│   ├── evaluation_choice.yaml           # 평가 설정
-│   ├── evaluation_experiment.ipynb      # 평가 노트북
-│   └── reporting.py                     # 결과 보고서 생성
-├── outputs/                             # 로컬 실행 결과
-│   ├── evaluation/                      # 평가 보고서·결과 JSON
-│   └── handoff/                         # MLflow 전달 bundle
-└── tracking/                            # 결과 bundle 생성·MLflow 등록
-    ├── MLFLOW_HANDOFF.md                # MLflow 담당자 안내
-    ├── __init__.py                      # Python 패키지 표시
-    ├── __pycache__/                     # Python 임시 캐시
-    ├── bundle.py                        # 결과 bundle 생성
-    ├── handoff.yaml                     # bundle 계약·파일 정책
-    ├── import_bundle_to_mlflow.py       # bundle 검증·MLflow 업로드
-    └── model_flavors.py                 # sklearn·PyTorch MLflow Model 저장
+├── basic.yaml                         # shared data paths, ID/label schema, features, ECG policy
+├── fusion.yaml                        # selected saved ML/DL runs, weights, threshold
+├── ECG+clinical_experiment.ipynb      # saved-model fusion only; does not train base models
+├── config.py                          # YAML-relative path resolution
+├── data.py                            # ID joins, validation, exclusions, cohort audit
+├── inference.py                       # saved ML/DL artifact load and probability prediction
+├── fusion.py                          # validation-only weight fit and patient-level probability join
+├── ML/
+│   ├── dataloader/                    # clinical loader entry points
+│   ├── data/                          # data use notes; no duplicate CSVs
+│   ├── models.py                      # model-specific preprocessing and estimators
+│   ├── model_choice.yaml              # models, preprocessing, selection policy
+│   ├── model_experiment_only_ML.ipynb
+│   ├── xgboost/{xgboost.py,parameter.yaml}
+│   ├── catboost/{catboost.py,parameter.yaml}
+│   ├── random_forest/{random_forest.py,parameter.yaml}
+│   └── models/<run_id>/               # generated best model, preprocessing, config, audit, metrics
+├── DL/
+│   ├── dataloader/                    # memory-mapped patient/window dataset
+│   ├── data/                          # waveform use notes
+│   ├── composed.py                    # CNN window encoder + LSTM/Transformer sequence head
+│   ├── models.py                      # CNN feature encoders
+│   ├── model_choice.yaml              # selected composition and threshold
+│   ├── training.yaml                  # optimizer, epochs, early stopping, device/workers
+│   ├── model_experiment_only_DL.ipynb
+│   ├── CNN/model_set.yaml             # ResNet, InceptionTime, TCN parameters
+│   ├── LSTM/model_set.yaml            # Attention LSTM FCN, BiLSTM parameters
+│   ├── Transformer/transformer.yaml   # transformer_enc parameters
+│   └── models/<run_id>/               # generated checkpoint, config, audit, metrics, history
+└── evaluation/
+    ├── eval.yaml                      # model, split, threshold override, result location
+    ├── evaluation.py                  # common saved-model evaluation CLI/module
+    └── results/<target>/<run_id>/     # generated predictions, audit, metrics
 ```
 
-## 실행 기준
+## Verified data and cohort policy
 
-- 임상 모델의 실제 구현은 `../scripts/evaluate_preprocessed_clinical.py`이며 XGBoost와 CatBoost를 같은 환자 분할에서 비교합니다.
-- 임상 feature 입력은 `../datas/clincal/clinical_clean.csv`, split membership은 `../datas/clincal/splits/{train,val,test}.csv`입니다. 모델 팩토리는 `ML/models.py`, loader는 `ML/dataloader/clinical.py`, 비교 runner는 `../scripts/evaluate_preprocessed_clinical.py`입니다.
-- Holter 모델의 실제 구현은 `../scripts/evaluate_ecg_architectures.py`, 모델 정의는 `DL/models.py`입니다. 파형 입력은 `../datas/Holter/windows/Pxxxx.npy` 환자별 파일입니다.
-- 현재 Holter 확인 범위는 `../datas/Holter/windows/P0002.npy` 한 파일의 forward smoke이며, 학습·성능지표·MLflow bundle은 만들지 않습니다. [`smoke_p0002_holter.py`](../scripts/smoke_p0002_holter.py)를 사용합니다.
-- NPY windows loader는 `DL/dataloader/holter_windows.py`입니다. `(N_windows,3,2000)`에서 환자별 8개 window를 기록 전체에 균등하게 골라 `(N,8,3,2000)`으로 구성합니다.
-- `ML/models.py`와 `DL/models.py`가 공통 전처리와 네트워크 구현을 보유합니다. 평가 스크립트는 `model_choice.yaml`, 모델별 `parameter.yaml`·`model_set.yaml`·`transformer.yaml`을 읽어 후보 목록, 데이터 경로, 학습값과 architecture 설정을 적용합니다. 모델별 하위 Python 파일은 공통 구현을 노출하는 entry point입니다.
-- 두 평가 스크립트는 `evaluation/ML/clinical.py`, `evaluation/DL/holter.py`의 metric 함수를 사용합니다. 저장된 prediction만 다시 평가하는 방법은 [evaluation README](evaluation/README.md)에 있습니다.
-- `ML/data`와 `DL/data`는 데이터 복사본이 아닙니다. 원본은 각각 `../datas/clincal/clinical_clean.csv`와 `../datas/Holter/windows/`입니다.
-- 실험 노트북은 공통 평가 스크립트를 호출하는 실행 진입점입니다. 실제 결과는 스크립트가 `report.md`와 `results.json`으로 저장합니다. 명령은 저장소 루트에서 실행합니다.
-- MLflow 담당자는 로컬 handoff bundle을 검사하고 MLflow run으로 등록하는 [importer 사용법](tracking/MLFLOW_HANDOFF.md)을 참고하세요.
-- 평가 스크립트의 `--tracking-output`은 실행할 때마다 모델별 번들을 새 폴더에 저장합니다. 로컬 추적 준비물은 `.gitignore`에서 제외되며, 자동 MLflow 업로드는 하지 않습니다.
+`basic.yaml` is the sole source for data paths and schema. Relative paths resolve from `basic.yaml` itself, regardless of the current working directory. Current paths are:
+
+- Clinical: `../datas/clincal/clinical_clean.csv`
+- Split: `../datas/clincal/split_team_v1.csv`
+- ECG: `../datas/Holter/windows/{pid}.npy`
+- ECG window metadata: `../datas/Holter/index/windows.csv.gz` (used to align array rows, timestamps, and `sqi_pass`)
+
+The audit rechecked 552 clinical rows (486 label 0, 66 label 1), 708 unique split IDs (460 train, 114 validation, 134 test), and 265 NPY files. Clinical/split intersection is 508: train 337, validation 80, test 91. Of those, 229 also have valid ECG and clinical labels: train 148, validation 36, test 45. These are the only patients eligible for ML+DL fusion. P1030 is assigned to train and has a valid NPY but has no clinical row or SCD label, so it is used only for unlabeled waveform/forward checks and excluded from supervised fitting.
+
+The audit writes exact modality patient lists and exclusion reasons. ML uses clinical∩split. DL uses clinical∩split∩valid ECG. Fusion uses the intersection of ML and DL predictions. No patient is moved to a new split. Duplicate IDs, conflicting labels, malformed split values, missing configured features, array shape/dtype errors, and invalid selected windows fail clearly. NPY arrays are memory-mapped; only the configured eight windows are read per patient per batch.
+
+## ECG sequence and preprocessing
+
+The sidecar has `pid`, `row`, `win_idx`, `start_sec`, and per-window SQI fields. For the matched cohort, array lengths are checked against sidecar row counts and rows are validated in chronological order without overlap. The inspected records (including P1030) have 10-second `start_sec` intervals; other matched records are checked for chronological non-overlap but are not asserted to have an exact 10-second interval. The source MUSIC Holter recording is documented at 200 Hz, while NPY files themselves carry no sampling-rate metadata. See the [MUSIC source paper](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0186152).
+
+The chosen model sequence is **CNN each selected window → ordered window embeddings → LSTM or Transformer**. It does not flatten the whole NPY. Eight `sqi_pass=1` windows are selected evenly through the recording and kept in chronological order. The dataloader converts to float32 and applies per-window, per-lead z-score normalization. The upstream filtering/normalization history of the NPY values is not recorded in this repository; the local dataloader normalization is explicit and configurable in `basic.yaml`.
+
+The SCD column is used as the supplied binary label without reassigning outcomes. MUSIC publications describe enrollment-time clinical predictors and SCD events observed during follow-up (median follow-up about 44 months); the supplied clean CSV has no event horizon/censoring columns, so these experiments do not claim a fixed-horizon probability or survival analysis. See the [MUSIC study description](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0186152) and [PhysioNet dataset page](https://physionet.org/content/music-sudden-cardiac-death/1.0.1/).
+
+## Run
+
+From the repository root, using the `Global` project environment:
+
+```bash
+uv run --project Global --extra ml python Members/sang/scripts/audit_model_data.py
+uv run --project Global --extra ml python Members/sang/scripts/evaluate_preprocessed_clinical.py
+uv run --project Global --extra gpu python Members/sang/scripts/evaluate_ecg_architectures.py
+uv run --project Global python -m Members.sang.model.evaluation.evaluation
+```
+
+The compatibility-named clinical and ECG scripts now call the configured trainers. Training selects checkpoints using validation Average Precision and does not evaluate test. Small real-data smoke options are available as `--limit-train-patients 32` for ML and `--max-epochs 1 --limit-train-patients 16 --device cpu` for DL. These produce test-only local artifacts and are not full cohort models.
+
+Run all nine supported encoder/head combinations on real, unlabeled P1030 windows:
+
+```bash
+uv run --project Global --extra gpu python Members/sang/scripts/smoke_p1030_holter.py
+```
+
+## YAML and artifacts
+
+- Edit data paths, ID/label columns, split mapping, feature list, filename pattern, and ECG window policy in `basic.yaml`.
+- Select XGBoost, CatBoost, and/or Random Forest in `ML/model_choice.yaml`. Change each model's hyperparameters and `classification.threshold` in its `parameter.yaml`. Random Forest uses train-fitted imputation/one-hot preprocessing and has no early stopping; its validation AP is recorded for comparison.
+- ML별 `model`, `training`, `classification` parameter key의 역할은 [`ML/PARAMETER_GUIDE.md`](ML/PARAMETER_GUIDE.md)에 정리했습니다.
+- Select `combination`, `cnn_model`, `sequence_model`, and the DL `classification.threshold` in `DL/model_choice.yaml`. Adjust CNN/LSTM/Transformer parameters in their referenced model YAMLs. Training settings live in `DL/training.yaml`.
+- Each ML candidate writes a unique run to `ML/models/<run_id>/`; DL writes to `DL/models/<run_id>/`. Existing run directories are never overwritten. XGBoost and CatBoost select their best iteration by validation AP; Random Forest uses its configured tree count and records validation AP for candidate comparison. Test scoring is a separate evaluation step.
+- `fusion.yaml` chooses saved model directories. `mode: manual` checks weights are nonnegative and sum to one; `mode: learn` fits only the scalar fusion weights on validation probabilities; `mode: saved` reuses weights saved by a prior fusion run. Base models and preprocessors are not refit during fusion.
+- `evaluation/eval.yaml` selects `ml`, `dl`, or `fusion`, an explicit validation/test split, optional threshold override, and output path. Threshold overrides change binary decisions and threshold-dependent metrics without retraining or changing saved probabilities.
+
+Evaluation outputs include patient ID, split, target, positive probability, actual threshold, binary decision, and model/run ID. Fusion additionally writes both input probabilities, final probability, and weights. Average Precision is named explicitly; AUROC is calculated from probabilities. Metrics undefined for a single-class split are recorded as unavailable with a reason.
+
+**Do not select a model, epoch, fusion weight, or threshold after inspecting test performance.** A validation score used for checkpoint or fusion-weight selection is not an independent final estimate.
+
+## MLflow handoff
+
+MLflow 담당자용 절차와 로컬 bundle 생성 명령은 [`tracking/MLFLOW_HANDOFF.md`](tracking/MLFLOW_HANDOFF.md)에 있습니다. Bundle 필드, prediction CSV, artifact checksum 및 업로드 경계는 [`tracking/BUNDLE_CONTRACT.md`](tracking/BUNDLE_CONTRACT.md)를 참고하세요. Exporter는 완료된 전체 학습 run을 사용하며 자동 업로드하지 않습니다.
+
+## 실험 순서도
+
+임상 ML, Holter DL, 임상+Holter Fusion의 모델 분기와 tensor 흐름은 [`EXPERIMENT_FLOWCHARTS.md`](EXPERIMENT_FLOWCHARTS.md)의 SVG 구성도에서 확인할 수 있습니다.

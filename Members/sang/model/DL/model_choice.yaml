@@ -1,47 +1,12 @@
-# ECG 후보는 같은 환자 split과 window sampling을 사용하며 입력 표현은 원시 파형과 구간 통계로 나뉩니다.
-task: patient_level_scd_classification
-input: holter_ecg
-data_dir: Members/sang/datas/Holter/windows
-source_file_pattern: "Pxxxx.npy (one array per patient)"
-source_array_layout: "(available_windows, 3 leads, 2000 samples)"
-window_dtype: float16
-model_input_dtype: float32
-windows_per_patient: 8
-patient_id_source: Members/sang/datas/clincal/splits/{train,val,test}.csv
-target_column: SCD
-window_selection: evenly_spaced_across_recording
-model_raw_input: "(batch, 8, 3, 2000)"
-model_segment_statistics_input: "(batch, 8, 16)"
-model_output: "(batch, 1) logits; sigmoid gives patient-level risk probability"
-sampling_rate_hz_assumption: 200
-normalization: per_window_per_lead_zscore
-splits_dir: Members/sang/datas/clincal/splits
-training_config: Members/sang/model/DL/training.yaml
-architecture_configs:
-  - Members/sang/model/DL/CNN/model_set.yaml
-  - Members/sang/model/DL/LSTM/model_set.yaml
-  - Members/sang/model/DL/Transformer/transformer.yaml
-  - Members/sang/model/DL/Segment_MIL/model_set.yaml
-leads: 3
-samples_per_window: 2000
-runner: Members/sang/scripts/evaluate_ecg_architectures.py
-model_factory: Members/sang/model/DL/models.py
-data_loader: Members/sang/model/DL/dataloader/holter_windows.py
+basic_config: ../basic.yaml
+combination: CNN+LSTM
+cnn_model: ResNet
+sequence_model: BiLSTM
+training_config: training.yaml
+cnn_config: CNN/model_set.yaml
+lstm_config: LSTM/model_set.yaml
+transformer_config: Transformer/transformer.yaml
+model_output_dir: models
 selection_metric: validation_average_precision
-threshold_strategy: validation_youden_j
-models:
-  CNN:
-    - ResNet
-    - InceptionTime
-    - TCN
-    - Raw ECG MIL
-  LSTM:
-    - Attention LSTM FCN
-    - BiLSTM
-  Transformer:
-    - ECG Transformer
-    - CNN+Transformer
-  segment_statistics:
-    - Segment Attention MIL
-    - MIL-TCN
-notes: "The runner reads these data, model, and preprocessing choices plus the referenced training and architecture YAML files. CLI arguments override training/data defaults."
+classification:
+  threshold: 0.5

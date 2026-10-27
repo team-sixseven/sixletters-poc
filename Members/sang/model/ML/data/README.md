@@ -1,5 +1,5 @@
-# 임상 데이터 경로
+# Clinical ML data
 
-데이터를 복사하지 않습니다. 임상 feature 원본은 `../../datas/clincal/clinical_clean.csv`, patient split은 `../../datas/clincal/splits/{train,val,test}.csv`입니다.
+The shared source of truth is `../../basic.yaml`. Clinical features come from `../../datas/clincal/clinical_clean.csv` and split assignment comes only from `../../datas/clincal/split_team_v1.csv`. IDs are read as strings so leading zeros and `P` prefixes are preserved.
 
-Loader는 clean CSV에서 feature를 읽고, split CSV에서 ID membership과 label 일치 여부만 확인합니다. 공통 분할과 실험 제한은 `../../docs/preprocessed_data_model_comparison.md`를 참고하세요.
+Column names are whitespace-trimmed in memory. Duplicate names created by trimming are rejected. The explicit 23-feature allowlist and seven categorical columns live in `basic.yaml`; patient ID, `SCD`, and split values are excluded from model features. Imputation, scaling, and one-hot encoding for XGBoost and Random Forest are fit on train only. CatBoost receives the declared categorical columns as string categories.

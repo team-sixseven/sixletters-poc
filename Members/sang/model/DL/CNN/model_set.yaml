@@ -1,26 +1,20 @@
 models:
   ResNet:
     implementation: Members/sang/model/DL/models.py::ResNetECG
-    input: [batch, 8, 3, 2000]
-    output: [batch, 1]
-    patient_aggregation: mean_segment_logit
+    feature_method: forward_features
+    input: [batch, 3, 2000]
+    output: [batch, 64]
     parameters: {channels: 3, width: 32, blocks: [2, 2]}
   InceptionTime:
     implementation: Members/sang/model/DL/models.py::InceptionTimeECG
-    input: [batch, 8, 3, 2000]
-    output: [batch, 1]
-    patient_aggregation: mean_segment_logit
+    feature_method: forward_features
+    input: [batch, 3, 2000]
+    output: [batch, 64]
     parameters: {channels: 3, filters: 16, modules: 3, kernels: [9, 19, 39]}
   TCN:
     implementation: Members/sang/model/DL/models.py::TCNECG
-    input: [batch, 8, 3, 2000]
-    output: [batch, 1]
-    patient_aggregation: mean_segment_logit
+    feature_method: forward_features
+    input: [batch, 3, 2000]
+    output: [batch, 32]
     parameters: {channels: 3, hidden_dim: 32, dilations: [1, 2, 4], kernel_size: 3}
-  Raw ECG MIL:
-    implementation: Members/sang/model/DL/models.py::RawECGMIL
-    input: [batch, 8, 3, 2000]
-    output: [batch, 1]
-    patient_aggregation: attention
-    parameters: {channels: 3, hidden_dim: 32}
 # Model architecture settings are loaded by evaluate_ecg_architectures.py.

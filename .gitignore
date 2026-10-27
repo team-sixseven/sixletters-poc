@@ -36,6 +36,9 @@ Thumbs.db
 /Members/*/split_datas/
 /Members/*/results/
 /Members/*/model/outputs/
+/Members/*/model/reports/
+/Members/*/model/ML/models/
+/Members/*/model/DL/models/
 # Patient IDs and cohort assignments in local ECG pilot manifests/results.
 /Members/*/docs/ecg_*_download_manifest.json
 /Members/*/docs/ecg_*_model_comparison.json
