@@ -1,12 +1,2 @@
-basic_config: ../basic.yaml
-combination: CNN+LSTM
 cnn_model: ResNet
 sequence_model: BiLSTM
-training_config: training.yaml
-cnn_config: CNN/model_set.yaml
-lstm_config: LSTM/model_set.yaml
-transformer_config: Transformer/transformer.yaml
-model_output_dir: models
-selection_metric: validation_average_precision
-classification:
-  threshold: 0.5

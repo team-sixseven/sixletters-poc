@@ -90,6 +90,11 @@ def load_experiment_config(path: Path) -> tuple[dict[str, Any], dict[str, Any], 
     """Load an experiment YAML and its shared basic.yaml reference."""
     experiment_path = path.resolve()
     experiment = load_yaml(experiment_path)
+    if "cnn_model" in experiment:
+        if set(experiment) != {"cnn_model", "sequence_model"}:
+            raise ValueError("DL/model_choice.yaml must contain only cnn_model and sequence_model")
+        basic_path = dl_config_paths(experiment_path)["basic"]
+        return experiment, load_basic_config(basic_path), experiment_path, basic_path
     if "basic_config" not in experiment:
         raise ValueError(f"{experiment_path}: missing required basic_config")
     basic_path = resolve_config_path(experiment["basic_config"], experiment_path)
@@ -100,3 +105,15 @@ def load_experiment_config(path: Path) -> tuple[dict[str, Any], dict[str, Any], 
 def resolve_data_path(value: str | Path, basic_path: Path) -> Path:
     """Resolve a data/output path relative to the basic config that declares it."""
     return resolve_config_path(value, basic_path)
+
+
+def dl_config_paths(choice_path: Path) -> dict[str, Path]:
+    """Repository layout, not experiment YAML, owns configuration-file routing."""
+    directory = choice_path.resolve().parent
+    return {
+        "basic": directory.parent / "basic.yaml",
+        "training": directory / "training.yaml",
+        "cnn": directory / "CNN/model_set.yaml",
+        "lstm": directory / "LSTM/model_set.yaml",
+        "transformer": directory / "Transformer/transformer.yaml",
+    }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -129,21 +130,17 @@ def _ecg_inventory(
 def _validate_ecg_headers(
     files: dict[str, Path], basic: dict[str, Any]
 ) -> tuple[dict[str, int], dict[str, str]]:
-    config = basic["data"]["ecg"]
     counts: dict[str, int] = {}
     invalid: dict[str, str] = {}
-    expected = (config["leads"], config["samples_per_window"])
     for patient_id, path in files.items():
         try:
             array = np.load(path, mmap_mode="r", allow_pickle=False)
-            if array.ndim != 3 or array.shape[1:] != expected:
-                raise ValueError(
-                    f"expected (windows,{expected[0]},{expected[1]}), got {array.shape}"
-                )
+            if array.ndim != 3 or min(array.shape) < 1:
+                raise ValueError(f"expected nonempty (windows,lead,sample), got {array.shape}")
             if array.dtype.kind not in "fiu":
                 raise ValueError(f"unsupported dtype {array.dtype}")
-            if array.shape[0] < config["windows_per_patient"]:
-                raise ValueError(f"only {array.shape[0]} windows available")
+            if array.shape[0] < 1:
+                raise ValueError("no ECG windows available")
             counts[patient_id] = int(array.shape[0])
         except (OSError, ValueError, EOFError) as error:
             invalid[patient_id] = str(error)
@@ -154,6 +151,8 @@ def _load_window_quality_index(
     basic: dict[str, Any], basic_path: Path, patient_ids: set[str]
 ) -> tuple[dict[str, np.ndarray], dict[str, int]]:
     """Read aligned sidecar rows in chunks and retain only SQI-passing NPY row indices."""
+    if not patient_ids:
+        return {}, {}
     config = basic["data"]["ecg"]
     metadata_path = resolve_data_path(config["metadata_path"], basic_path)
     if not metadata_path.is_file():
@@ -161,8 +160,20 @@ def _load_window_quality_index(
             f"basic.yaml data.ecg.metadata_path -> {metadata_path} does not exist"
         )
     stat = metadata_path.stat()
+    directory = resolve_data_path(config["directory"], basic_path)
+    durations = {}
+    for pid in patient_ids:
+        waveform_path = directory / config["filename_pattern"].format(pid=pid)
+        if waveform_path.is_file():
+            shape = np.load(waveform_path, mmap_mode="r", allow_pickle=False).shape
+            if len(shape) == 3:
+                durations[pid] = shape[-1] / config["sample_rate_hz"]
+    # Revalidate timestamps if waveform sample lengths or the source rate change.
+    signature = hashlib.sha256(json.dumps(durations, sort_keys=True).encode()).hexdigest()[:16]
     cache_dir = basic_path.parent / "outputs" / "cache"
-    cache_path = cache_dir / f"window_quality_index_{stat.st_size}_{stat.st_mtime_ns}.npz"
+    cache_path = (
+        cache_dir / f"window_quality_index_{stat.st_size}_{stat.st_mtime_ns}_{signature}.npz"
+    )
     if cache_path.is_file():
         with np.load(cache_path, allow_pickle=False) as cached:
             indices = {
@@ -186,11 +197,15 @@ def _load_window_quality_index(
     selected_rows: dict[str, list[np.ndarray]] = {}
     row_counts: dict[str, int] = {}
     last_times: dict[str, float] = {}
-    expected_duration = config["samples_per_window"] / config["sample_rate_hz"]
     for chunk in pd.read_csv(
         metadata_path,
         usecols=[id_col, row_col, time_col, quality_col],
-        dtype={id_col: "string", row_col: "int64", time_col: "float64", quality_col: "int8"},
+        dtype={
+            id_col: "string",
+            row_col: "int64",
+            time_col: "float64",
+            quality_col: "int8",
+        },
         chunksize=250_000,
     ):
         if chunk.empty:
@@ -202,7 +217,8 @@ def _load_window_quality_index(
             row_numbers = rows[row_col].to_numpy(dtype=np.int64)
             expected_first = row_counts[patient_id]
             if row_numbers[0] != expected_first or not np.array_equal(
-                row_numbers, np.arange(expected_first, expected_first + len(row_numbers))
+                row_numbers,
+                np.arange(expected_first, expected_first + len(row_numbers)),
             ):
                 raise ValueError(
                     f"{metadata_path}: {patient_id} row indices do not align with NPY order"
@@ -211,7 +227,7 @@ def _load_window_quality_index(
             if patient_id in last_times:
                 times = np.concatenate(([last_times[patient_id]], times))
             gaps = np.diff(times)
-            if np.any(gaps < expected_duration - 1e-6):
+            if np.any(gaps < durations.get(patient_id, 0) - 1e-6) or np.any(gaps <= 0):
                 raise ValueError(
                     f"{metadata_path}: {patient_id} windows overlap or timestamps are unordered"
                 )
@@ -244,7 +260,12 @@ def _load_window_quality_index(
 
 def load_cohorts(
     basic: dict[str, Any], basic_path: Path
-) -> tuple[pd.DataFrame, dict[str, dict[str, pd.DataFrame]], dict[str, Any], dict[str, np.ndarray]]:
+) -> tuple[
+    pd.DataFrame,
+    dict[str, dict[str, pd.DataFrame]],
+    dict[str, Any],
+    dict[str, np.ndarray],
+]:
     """Build ML, DL, and fusion cohort frames without inventing split or label data."""
     clinical, column_mapping = _read_clinical(basic, basic_path)
     split = _read_splits(basic, basic_path)
@@ -275,8 +296,7 @@ def load_cohorts(
     valid_ecg_ids = {
         patient_id
         for patient_id in window_indices
-        if patient_id not in invalid_ecg
-        and len(window_indices[patient_id]) >= basic["data"]["ecg"]["windows_per_patient"]
+        if patient_id not in invalid_ecg and len(window_indices[patient_id]) >= 1
     }
     invalid_ecg.update(
         {
@@ -400,7 +420,10 @@ def load_patient_waveform(
     ecg_path: Path,
     valid_window_indices: np.ndarray,
     ecg_config: dict[str, Any],
-) -> tuple[np.ndarray, np.ndarray]:
+    *,
+    return_lead_mask: bool = False,
+    max_windows: int | None = None,
+) -> tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Load SQI-passing windows, select them chronologically, and z-score each lead."""
     if ecg_config.get("quality_filter") != "sqi_pass_only":
         raise ValueError("Only ecg.quality_filter=sqi_pass_only is supported")
@@ -410,16 +433,18 @@ def load_patient_waveform(
         )
     if ecg_config.get("normalization") != "per_window_per_lead_zscore":
         raise ValueError(f"Unsupported ecg.normalization: {ecg_config.get('normalization')!r}")
-    count = ecg_config["windows_per_patient"]
-    if len(valid_window_indices) < count:
-        raise ValueError(f"{patient_id}: only {len(valid_window_indices)} usable ECG windows")
-    selected = np.linspace(0, len(valid_window_indices) - 1, count, dtype=np.int64)
+    count = len(valid_window_indices) if max_windows is None else int(max_windows)
+    if count < 1:
+        raise ValueError("max_windows must be positive")
+    if len(valid_window_indices) == 0:
+        raise ValueError(f"{patient_id}: no SQI-passing windows are available")
+    selected_count = min(count, len(valid_window_indices))
+    selected = np.linspace(0, len(valid_window_indices) - 1, selected_count, dtype=np.int64)
     row_indices = valid_window_indices[selected]
     array = np.load(ecg_path, mmap_mode="r", allow_pickle=False)
     raw = np.asarray(array[row_indices], dtype=np.float32)
-    expected = (count, ecg_config["leads"], ecg_config["samples_per_window"])
-    if raw.shape != expected:
-        raise ValueError(f"{ecg_path}: selected shape {raw.shape}, expected {expected}")
+    if raw.ndim != 3 or raw.shape[0] != selected_count or min(raw.shape[1:]) < 1:
+        raise ValueError(f"{ecg_path}: unsupported selected ECG shape {raw.shape}")
     if not np.isfinite(raw).all():
         raise ValueError(f"{ecg_path}: selected ECG windows contain NaN or Inf")
     mean = raw.mean(axis=-1, keepdims=True)
@@ -428,7 +453,12 @@ def load_patient_waveform(
     if np.any(flat.all(axis=1)):
         raise ValueError(f"{ecg_path}: selected window has no varying lead")
     normalized = (raw - mean) / np.where(flat, 1.0, std)
-    return normalized.astype(np.float32, copy=False), row_indices
+    measured_leads = raw.shape[1]
+    lead_mask = np.ones(measured_leads, dtype=bool)
+    output = normalized.astype(np.float32, copy=False)
+    if return_lead_mask:
+        return output, row_indices, lead_mask
+    return output, row_indices
 
 
 def load_patient_quality_indices(
@@ -447,6 +477,6 @@ def load_patient_quality_indices(
             f"{patient_id}: NPY has {counts[patient_id]} windows but sidecar has "
             f"{metadata_counts[patient_id]} rows"
         )
-    if len(indices[patient_id]) < basic["data"]["ecg"]["windows_per_patient"]:
-        raise ValueError(f"{patient_id}: too few SQI-passing windows for model input")
+    if not len(indices[patient_id]):
+        raise ValueError(f"{patient_id}: no SQI-passing windows for model input")
     return indices[patient_id]

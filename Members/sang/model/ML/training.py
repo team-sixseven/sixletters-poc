@@ -17,7 +17,12 @@ import yaml
 from sklearn.metrics import average_precision_score
 from xgboost import callback
 
-from ..config import load_experiment_config, load_yaml, resolve_config_path, resolve_data_path
+from ..config import (
+    load_experiment_config,
+    load_yaml,
+    resolve_config_path,
+    resolve_data_path,
+)
 from ..data import clinical_feature_columns, load_cohorts, write_audit
 from ..evaluation.core import binary_metrics, validate_threshold
 from .artifacts import configured_model_run, save_model_path
@@ -144,6 +149,7 @@ def train_clinical(
     reuse_saved: bool = True,
     model_version: int | None = None,
     output_directory: Path | None = None,
+    mlflow_logging: bool = False,
 ) -> list[Path]:
     """Reuse configured saved runs, or fit YAML parameters; Optuna uses reuse_saved=False."""
     choice, basic, choice_path, basic_path = load_experiment_config(choice_path)
@@ -157,6 +163,10 @@ def train_clinical(
         raise ValueError("ML model_choice.yaml models must select at least one model")
     if model_parameters is not None and len(selected_names) != 1:
         raise ValueError("model_parameters requires exactly one selected ML model")
+    if mlflow_logging:
+        from ..tracking.check_connection import check_mlflow_connection
+
+        check_mlflow_connection()
     selected_features = None if model_version is None else get_feature_columns(model_version)
     runs = {}
     pending = []
@@ -169,12 +179,18 @@ def train_clinical(
             if saved_run is not None:
                 runs[model_name] = saved_run
                 print(
-                    json.dumps({"model": model_name, "source": "saved", "run_dir": str(saved_run)})
+                    json.dumps(
+                        {
+                            "model": model_name,
+                            "source": "saved",
+                            "run_dir": str(saved_run),
+                        }
+                    )
                 )
                 continue
         pending.append((model_name, parameter_path, load_yaml(parameter_path)))
     if not pending:
-        return [runs[name] for name in selected_names]
+        return _finish_runs([runs[name] for name in selected_names], mlflow_logging)
     clinical, cohorts, audit, _ = load_cohorts(basic, basic_path)
     train = cohorts["ml"]["train"]
     validation = cohorts["ml"]["validation"]
@@ -250,7 +266,10 @@ def train_clinical(
             )
         run_dir.mkdir(parents=True)
         (run_dir / "run_status.json").write_text(
-            json.dumps({"status": "RUNNING", "model": model_name, "run_id": this_run_id}, indent=2),
+            json.dumps(
+                {"status": "RUNNING", "model": model_name, "run_id": this_run_id},
+                indent=2,
+            ),
             encoding="utf-8",
         )
         write_audit(audit, run_dir / "data_audit")
@@ -375,6 +394,7 @@ def train_clinical(
             "actual_train_patients_used": len(fit_train),
             "feature_names": feature_names,
             "categorical_features": categorical,
+            "mlflow_logging": mlflow_logging,
         }
         _write_yaml(run_dir / "resolved_config.yaml", resolved)
         metadata = {
@@ -401,7 +421,13 @@ def train_clinical(
             "data_audit_counts": audit["counts"],
             "package_versions": {
                 package: importlib.metadata.version(package)
-                for package in ("numpy", "pandas", "scikit-learn", "xgboost", "catboost")
+                for package in (
+                    "numpy",
+                    "pandas",
+                    "scikit-learn",
+                    "xgboost",
+                    "catboost",
+                )
             },
         }
         (run_dir / "metadata.json").write_text(
@@ -413,11 +439,29 @@ def train_clinical(
         )
         (run_dir / "run_status.json").write_text(
             json.dumps(
-                {"status": "COMPLETE", "model": model_name, "run_id": this_run_id}, indent=2
+                {"status": "COMPLETE", "model": model_name, "run_id": this_run_id},
+                indent=2,
             ),
             encoding="utf-8",
         )
         if reuse_saved:
             save_model_path(parameter_path, run_dir)
         runs[model_name] = run_dir
+        if mlflow_logging:
+            # Persist this run remotely before starting the next selected algorithm.
+            from ..tracking.log_best import finish_ml_training
+
+            finish_ml_training(run_dir, mlflow_logging=True)
+    # New runs were logged above; saved runs also need account-specific registration.
+    saved = [runs[name] for name in selected_names if name not in {row[0] for row in pending}]
+    _finish_runs(saved, mlflow_logging)
     return [runs[name] for name in selected_names]
+
+
+def _finish_runs(runs: list[Path], mlflow_logging: bool) -> list[Path]:
+    if mlflow_logging:
+        from ..tracking.log_best import finish_ml_training
+
+        for run in runs:
+            finish_ml_training(run, mlflow_logging=True)
+    return runs

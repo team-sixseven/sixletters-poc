@@ -35,6 +35,10 @@ class ClinicalOptunaExperiment:
         choice, _, choice_path, _ = load_experiment_config(choice_path)
         if model_name not in choice["model_configs"]:
             raise ValueError(f"Unsupported ML model: {model_name}")
+        if mlflow_logging:
+            from ..tracking.check_connection import check_mlflow_connection
+
+            check_mlflow_connection()
         self.choice_path = choice_path
         self.model_name = model_name
         self.model_version = model_version
@@ -74,6 +78,7 @@ class ClinicalOptunaExperiment:
                 model_version=self.model_version,
                 reuse_saved=False,
                 output_directory=Path(temporary),
+                mlflow_logging=False,
             )[0]
             metrics = json.loads((run / "metrics.json").read_text(encoding="utf-8"))
             score = float(metrics["validation"]["average_precision"])
@@ -141,7 +146,8 @@ class ClinicalOptunaExperiment:
             "n_trials": len(study.trials),
         }
         (self._candidate / "best_parameters.yaml").write_text(
-            yaml.safe_dump(best_parameters, sort_keys=False, allow_unicode=True), encoding="utf-8"
+            yaml.safe_dump(best_parameters, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
         )
         study.trials_dataframe(attrs=("number", "value", "params", "state")).to_csv(
             self._candidate / "trials.csv", index=False
@@ -175,9 +181,16 @@ class ClinicalOptunaExperiment:
                 result = log_best_to_mlflow(target)
                 print("MLflow 결과:", result["url"])
             except Exception as error:
-                summary["mlflow"] = {"status": "PENDING", "error_type": type(error).__name__}
+                summary["mlflow"] = {
+                    "status": "PENDING",
+                    "error_type": type(error).__name__,
+                }
                 (target / "summary.json").write_text(
                     json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+                (target / "mlflow_status.json").write_text(
+                    json.dumps(summary["mlflow"], ensure_ascii=False, indent=2),
+                    encoding="utf-8",
                 )
                 warnings.warn(
                     f"MLflow 전송 미완료 ({type(error).__name__}). 로컬 best는 저장됐습니다. "

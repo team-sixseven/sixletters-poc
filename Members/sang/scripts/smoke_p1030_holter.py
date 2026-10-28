@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from model.config import load_basic_config, load_yaml, resolve_config_path
+from model.config import dl_config_paths, load_experiment_config, load_yaml
 from model.data import load_patient_quality_indices, load_patient_waveform
 from model.DL.composed import build_composed_model
 
@@ -19,19 +19,25 @@ from model.DL.composed import build_composed_model
 def main() -> int:
     model_root = Path(__file__).resolve().parents[1] / "model"
     choice_path = model_root / "DL/model_choice.yaml"
-    choice = load_yaml(choice_path)
-    basic_path = resolve_config_path(choice["basic_config"], choice_path)
-    basic = load_basic_config(basic_path)
+    choice, basic, choice_path, basic_path = load_experiment_config(choice_path)
+    paths = dl_config_paths(choice_path)
+    training = load_yaml(paths["training"])
     patient_id = "P1030"
     ecg = basic["data"]["ecg"]
     patient_file = (
         basic_path.parent / ecg["directory"] / ecg["filename_pattern"].format(pid=patient_id)
     ).resolve()
     quality_indices = load_patient_quality_indices(patient_id, basic, basic_path)
-    waveform, selected_rows = load_patient_waveform(patient_id, patient_file, quality_indices, ecg)
+    waveform, selected_rows = load_patient_waveform(
+        patient_id,
+        patient_file,
+        quality_indices,
+        ecg,
+        max_windows=training["max_segments_per_patient"],
+    )
     patient_tensor = torch.from_numpy(waveform).unsqueeze(0)
-    cnn_config = load_yaml(resolve_config_path(choice["cnn_config"], choice_path))
-    lstm_config = load_yaml(resolve_config_path(choice["lstm_config"], choice_path))
+    cnn_config = load_yaml(paths["cnn"])
+    lstm_config = load_yaml(paths["lstm"])
     results = []
 
     combinations = [
@@ -42,7 +48,6 @@ def main() -> int:
     torch.set_num_threads(1)
     for combination, cnn_name, sequence_name in combinations:
         configured = deepcopy(choice)
-        configured["combination"] = combination
         configured["cnn_model"] = cnn_name
         configured["sequence_model"] = sequence_name
         model = build_composed_model(configured, basic, choice_path=choice_path).eval()

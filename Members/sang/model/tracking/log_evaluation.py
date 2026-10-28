@@ -105,7 +105,26 @@ def log_evaluation_to_mlflow(evaluation_dir: Path) -> dict:
             ):
                 path = evaluation_dir / filename
                 if path.is_file():
-                    shutil.copy2(path, artifacts / filename)
+                    raw_models = (
+                        [model] if model is not None else list(resolved["selected_models"].values())
+                    )
+                    if filename == "resolved_config.yaml" and any(
+                        item.get("data_source") == "raw_wave" for item in raw_models
+                    ):
+                        # Raw metadata contains quality counts keyed by patient ID.
+                        # Keep the full local snapshot; upload aggregate linkage only.
+                        (artifacts / filename).write_text(
+                            yaml.safe_dump(
+                                {
+                                    "evaluation": params,
+                                    "metrics_requested": resolved.get("evaluation_metrics"),
+                                },
+                                sort_keys=True,
+                            ),
+                            encoding="utf-8",
+                        )
+                    else:
+                        shutil.copy2(path, artifacts / filename)
             result = upload(REPO_ROOT, staging)
         finally:
             shutil.rmtree(staging)

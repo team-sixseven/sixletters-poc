@@ -1,10 +1,11 @@
 basic_config: ../basic.yaml
 evaluation:
-  target: fusion
+  target: fusion  # fusion : ECG + clinical; ml : ML only(clincal); dl : DL only (ECG)
   fusion_config: ../fusion.yaml
   model_name: XGBoost  # Used for ML when artifact_dir is null.
   model_version: null  # ML: 1-4 for a saved input set; null uses the latest model_path.
-  artifact_dir: null  # ML: use the selected parameter.yaml model_path; DL: set a run directory.
+  model_path: null  # DL: ../DL/models/<run_id>/best_model.pt (or the saved run directory); set target: dl.
+  artifact_dir: null  # ML explicit run, or legacy DL run directory. Leave null when using model_path.
   split: test
   threshold_override: null
   results_directory: results

@@ -1,4 +1,3 @@
-# Common data schema. Relative paths resolve from this file's directory.
 data:
   clinical:
     path: ML/data/clinical_clean.csv
@@ -10,6 +9,14 @@ data:
     directory: ../datas/Holter/windows
     metadata_path: ../datas/Holter/index/windows.csv.gz
     sample_rate_hz: 200
-    leads: 3
-    samples_per_window: 2000
-    windows_per_patient: 8
+  raw_ecg:
+    split_path: DL/data/final_split_v2_augmented.csv
+    wave_directory: DL/data/wave
+    sample_rate_hz: 200
+    sample_rate_source: MUSIC_recording_headers_documented_in_members_sang_docs
+    source_metadata_confirmed: false
+    segment_seconds: 30
+    normalization: none
+    quality_index_path: null
+outputs:
+  dl_model_directory: DL/models

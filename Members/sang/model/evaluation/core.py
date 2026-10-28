@@ -8,9 +8,6 @@ from sklearn.metrics import (
     average_precision_score,
     brier_score_loss,
     confusion_matrix,
-    f1_score,
-    precision_score,
-    recall_score,
     roc_auc_score,
 )
 
@@ -65,6 +62,7 @@ def binary_metrics(target, probability, threshold: float) -> dict[str, float | i
     predicted = (score >= threshold).astype(np.int64)
     matrix = confusion_matrix(y, predicted, labels=[0, 1])
     negatives, positives = np.bincount(y, minlength=2)
+    tn, fp, fn, tp = (int(value) for value in matrix.ravel())
     reasons = {}
     if len(np.unique(y)) == 2:
         auroc = float(roc_auc_score(y, score))
@@ -74,6 +72,20 @@ def binary_metrics(target, probability, threshold: float) -> dict[str, float | i
         ap = None
         reason = "only_one_target_class_in_evaluation_split"
         reasons.update({"auroc": reason, "average_precision": reason})
+    precision_denominator = tp + fp
+    recall_denominator = tp + fn
+    f1_denominator = 2 * tp + fp + fn
+    precision = tp / precision_denominator if precision_denominator else None
+    recall = tp / recall_denominator if recall_denominator else None
+    f1 = 2 * tp / f1_denominator if f1_denominator else None
+    if precision is None:
+        reasons["precision"] = "no_positive_predictions"
+    if recall is None:
+        reasons["recall"] = reasons["sensitivity"] = "no_positive_targets"
+    if f1 is None:
+        reasons["f1"] = "f1_denominator_is_zero"
+    if not negatives:
+        reasons["specificity"] = "no_negative_targets"
     result: dict[str, float | int] = {
         "n": int(y.size),
         "scd": int(y.sum()),
@@ -83,11 +95,11 @@ def binary_metrics(target, probability, threshold: float) -> dict[str, float | i
         "auprc_average_precision": ap,
         "brier": float(brier_score_loss(y, score)),
         "accuracy": float(accuracy_score(y, predicted)),
-        "precision": float(precision_score(y, predicted, zero_division=0)),
-        "recall": float(recall_score(y, predicted, zero_division=0)),
-        "sensitivity": float(recall_score(y, predicted, zero_division=0)),
+        "precision": float(precision) if precision is not None else None,
+        "recall": float(recall) if recall is not None else None,
+        "sensitivity": float(recall) if recall is not None else None,
         "specificity": float(matrix[0, 0] / negatives) if negatives else None,
-        "f1": float(f1_score(y, predicted, zero_division=0)),
+        "f1": float(f1) if f1 is not None else None,
         "confusion_matrix": matrix.tolist(),
         "metric_reasons": reasons,
     }

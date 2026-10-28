@@ -1,14 +1,6 @@
 models:
   Attention LSTM FCN:
-    implementation: Members/sang/model/DL/composed.py::CNNLSTMClassifier
-    input: [batch, 8, cnn_feature_dim]
-    output: [batch, 1]
-    sequence_order: chronological
-    parameters: {channels: 3, hidden_dim: 32}
+    activation: GELU
+    dropout: 0.0
   BiLSTM:
-    implementation: Members/sang/model/DL/composed.py::CNNLSTMClassifier
-    input: [batch, 8, cnn_feature_dim]
-    output: [batch, 1]
-    sequence_order: chronological
-    parameters: {channels: 3, hidden_dim: 32, layers: 1}
-# Model architecture settings are loaded by evaluate_ecg_architectures.py.
+    dropout: 0.0

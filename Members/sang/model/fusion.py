@@ -96,10 +96,16 @@ def _aligned_predictions(
         validate="one_to_one",
     )
     mismatch = merged.loc[
-        merged["_merge"].eq("both") & merged.y_true_ml.ne(merged.y_true_dl), "patient_id"
+        merged["_merge"].eq("both") & merged.y_true_ml.ne(merged.y_true_dl),
+        "patient_id",
     ].tolist()
     if mismatch:
         raise ValueError(f"ML/DL label disagreement for patient IDs {mismatch[:10]}")
+    split_mismatch = merged.loc[
+        merged["_merge"].eq("both") & merged.split_ml.ne(merged.split_dl), "patient_id"
+    ].tolist()
+    if split_mismatch:
+        raise ValueError(f"ML/DL split disagreement for patient IDs {split_mismatch[:10]}")
     excluded = []
     for row in merged.loc[~merged["_merge"].eq("both")].to_dict("records"):
         reason = (
@@ -153,9 +159,51 @@ def run_fusion(
     else:
         ml_path = resolve_config_path(config["ml"]["artifact_dir"], config_path)
         dl_path = resolve_config_path(config["dl"]["artifact_dir"], config_path)
-    _, cohorts, audit, window_indices = load_cohorts(basic, basic_path)
     ml_metadata = json.loads((ml_path / "metadata.json").read_text(encoding="utf-8"))
     dl_metadata = json.loads((dl_path / "metadata.json").read_text(encoding="utf-8"))
+    _, cohorts, audit, window_indices = load_cohorts(basic, basic_path)
+    raw_dl = dl_metadata.get("data_source") == "raw_wave"
+    raw_usage = None
+    if raw_dl:
+        from .DL.raw_pipeline import (
+            RAW_USAGE_COLUMNS,
+            load_raw_evaluation_cohort,
+            predict_raw_dl_run,
+        )
+
+        raw_cohorts, raw_indices, raw_audit = load_raw_evaluation_cohort(dl_path, basic, basic_path)
+        ml_all = pd.concat(cohorts["ml"].values(), ignore_index=True)
+        raw_all = pd.concat(raw_cohorts.values(), ignore_index=True)
+        comparison = ml_all[["patient_id", "split", "y_true"]].merge(
+            raw_all[["patient_id", "split", "y_true"]],
+            on="patient_id",
+            how="inner",
+            suffixes=("_ml", "_raw"),
+            validate="one_to_one",
+        )
+        split_mismatch = comparison.loc[
+            comparison.split_ml.ne(comparison.split_raw), "patient_id"
+        ].tolist()
+        label_mismatch = comparison.loc[
+            comparison.y_true_ml.ne(comparison.y_true_raw), "patient_id"
+        ].tolist()
+        if split_mismatch or label_mismatch:
+            raise ValueError(
+                "ML/raw cohort assignment mismatch: "
+                f"split={split_mismatch[:10]}, labels={label_mismatch[:10]}"
+            )
+        cohorts["dl"] = raw_cohorts
+        window_indices = raw_indices
+        audit["available_patient_ids"]["dl"] = raw_audit["available_patient_ids"]["dl"]
+        audit["available_patient_ids"]["fusion"] = {
+            name: sorted(
+                set(audit["available_patient_ids"]["ml"][name])
+                & set(raw_audit["available_patient_ids"]["dl"][name])
+            )
+            for name in ("train", "validation", "test")
+        }
+        audit["exclusions"].extend(raw_audit["exclusions"])
+        audit["raw_wave_audit"] = raw_audit["counts"]
     for metadata, label in ((ml_metadata, "ML"), (dl_metadata, "DL")):
         if metadata.get("class_mapping") != {"negative": 0, "positive": 1}:
             raise ValueError(f"{label} artifact has incompatible positive class mapping")
@@ -167,8 +215,17 @@ def run_fusion(
     patients_ml = cohorts["ml"][split_name]
     patients_dl = cohorts["dl"][split_name]
     p_ml, _ = predict_ml_run(ml_path, patients_ml)
-    p_dl, _ = predict_dl_run(dl_path, patients_dl, window_indices)
+    if raw_dl:
+        p_dl, _, raw_usage = predict_raw_dl_run(dl_path, patients_dl, window_indices)
+    else:
+        p_dl, _ = predict_dl_run(dl_path, patients_dl, window_indices)
     predictions, excluded = _aligned_predictions(patients_ml, p_ml, patients_dl, p_dl)
+    if raw_usage is not None:
+        raw_usage_by_pid = dict(zip(patients_dl.patient_id.astype(str), raw_usage, strict=True))
+        for column in RAW_USAGE_COLUMNS:
+            predictions[column] = predictions.patient_id.map(
+                {pid: values[column] for pid, values in raw_usage_by_pid.items()}
+            )
     if predictions.empty:
         raise ValueError(f"No common {split_name} patients have both ML and DL predictions")
 
@@ -178,7 +235,10 @@ def run_fusion(
         val_ml = cohorts["ml"]["validation"]
         val_dl = cohorts["dl"]["validation"]
         val_p_ml, _ = predict_ml_run(ml_path, val_ml)
-        val_p_dl, _ = predict_dl_run(dl_path, val_dl, window_indices)
+        if raw_dl:
+            val_p_dl, _, _ = predict_raw_dl_run(dl_path, val_dl, window_indices)
+        else:
+            val_p_dl, _ = predict_dl_run(dl_path, val_dl, window_indices)
         val_predictions, _ = _aligned_predictions(val_ml, val_p_ml, val_dl, val_p_dl)
         weights, learning_details = _learn_weights(
             val_predictions.p_ml.to_numpy(),

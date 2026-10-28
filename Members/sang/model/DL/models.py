@@ -8,6 +8,9 @@ import torch
 from torch import nn
 
 from ..config import load_yaml
+from .CNN.inception_time import InceptionTimeECG
+from .CNN.resnet import ResNetECG
+from .CNN.TCN import TCNECG
 
 
 class ECGCNN(nn.Module):
@@ -27,173 +30,6 @@ class ECGCNN(nn.Module):
         return self.classifier(self.features(x).squeeze(-1))
 
 
-class _ResidualBlock1D(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, stride: int = 1) -> None:
-        super().__init__()
-        self.conv1 = nn.Conv1d(in_channels, out_channels, 7, stride=stride, padding=3, bias=False)
-        self.bn1 = nn.BatchNorm1d(out_channels)
-        self.conv2 = nn.Conv1d(out_channels, out_channels, 3, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm1d(out_channels)
-        self.shortcut = (
-            nn.Identity()
-            if in_channels == out_channels and stride == 1
-            else nn.Sequential(
-                nn.Conv1d(in_channels, out_channels, 1, stride=stride, bias=False),
-                nn.BatchNorm1d(out_channels),
-            )
-        )
-        self.activation = nn.ReLU(inplace=True)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        residual = self.shortcut(x)
-        x = self.activation(self.bn1(self.conv1(x)))
-        x = self.bn2(self.conv2(x))
-        return self.activation(x + residual)
-
-
-class ResNetECG(nn.Module):
-    """Residual 1D CNN for one three-lead ECG window."""
-
-    def __init__(
-        self, channels: int = 3, width: int = 32, blocks: tuple[int, int] = (2, 2)
-    ) -> None:
-        super().__init__()
-        self.stem = nn.Sequential(
-            nn.Conv1d(channels, width, 7, stride=2, padding=3, bias=False),
-            nn.BatchNorm1d(width),
-            nn.ReLU(inplace=True),
-            nn.MaxPool1d(3, stride=2, padding=1),
-        )
-        self.layer1 = self._make_layer(width, width, blocks[0], 1)
-        self.layer2 = self._make_layer(width, width * 2, blocks[1], 2)
-        self.pool = nn.AdaptiveAvgPool1d(1)
-        self.classifier = nn.Linear(width * 2, 1)
-
-    @staticmethod
-    def _make_layer(in_channels: int, out_channels: int, count: int, stride: int) -> nn.Sequential:
-        layers = [_ResidualBlock1D(in_channels, out_channels, stride)]
-        layers.extend(_ResidualBlock1D(out_channels, out_channels) for _ in range(count - 1))
-        return nn.Sequential(*layers)
-
-    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.layer2(self.layer1(self.stem(x)))
-        return self.pool(x).squeeze(-1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.classifier(self.forward_features(x))
-
-
-class _InceptionModule1D(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        filters: int = 16,
-        kernels: tuple[int, ...] = (9, 19, 39),
-    ) -> None:
-        super().__init__()
-        if len(kernels) != 3:
-            raise ValueError("InceptionTime requires exactly three convolution kernel sizes")
-        bottleneck = max(8, filters)
-        self.bottleneck = nn.Conv1d(in_channels, bottleneck, 1, bias=False)
-        self.branches = nn.ModuleList(
-            nn.Conv1d(bottleneck, filters, kernel, padding=kernel // 2, bias=False)
-            for kernel in kernels
-        )
-        self.pool_branch = nn.Sequential(
-            nn.MaxPool1d(3, stride=1, padding=1),
-            nn.Conv1d(in_channels, filters, 1, bias=False),
-        )
-        self.norm = nn.BatchNorm1d(filters * 4)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        reduced = self.bottleneck(x)
-        outputs = [branch(reduced) for branch in self.branches]
-        outputs.append(self.pool_branch(x))
-        return torch.relu(self.norm(torch.cat(outputs, dim=1)))
-
-
-class InceptionTimeECG(nn.Module):
-    """Compact InceptionTime-style network for one ECG window."""
-
-    def __init__(
-        self,
-        channels: int = 3,
-        filters: int = 16,
-        modules: int = 3,
-        kernels: tuple[int, ...] = (9, 19, 39),
-    ) -> None:
-        super().__init__()
-        layers = [_InceptionModule1D(channels, filters, kernels)]
-        layers.extend(_InceptionModule1D(filters * 4, filters, kernels) for _ in range(modules - 1))
-        self.features = nn.Sequential(*layers)
-        self.pool = nn.AdaptiveAvgPool1d(1)
-        self.classifier = nn.Linear(filters * 4, 1)
-
-    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
-        return self.pool(self.features(x)).squeeze(-1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.classifier(self.forward_features(x))
-
-
-class _Chomp1d(nn.Module):
-    def __init__(self, count: int) -> None:
-        super().__init__()
-        self.count = count
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x if self.count == 0 else x[..., : -self.count]
-
-
-class _TemporalBlock1D(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, kernel: int, dilation: int) -> None:
-        super().__init__()
-        padding = (kernel - 1) * dilation
-        self.network = nn.Sequential(
-            nn.Conv1d(in_channels, out_channels, kernel, padding=padding, dilation=dilation),
-            _Chomp1d(padding),
-            nn.ReLU(),
-            nn.Conv1d(out_channels, out_channels, kernel, padding=padding, dilation=dilation),
-            _Chomp1d(padding),
-            nn.ReLU(),
-        )
-        self.residual = (
-            nn.Identity()
-            if in_channels == out_channels
-            else nn.Conv1d(in_channels, out_channels, 1)
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.relu(self.network(x) + self.residual(x))
-
-
-class TCNECG(nn.Module):
-    """Causal temporal convolution network for one ECG window."""
-
-    def __init__(
-        self,
-        channels: int = 3,
-        hidden_dim: int = 32,
-        dilations: tuple[int, ...] = (1, 2, 4),
-        kernel_size: int = 3,
-    ) -> None:
-        super().__init__()
-        blocks = []
-        in_channels = channels
-        for dilation in dilations:
-            blocks.append(_TemporalBlock1D(in_channels, hidden_dim, kernel_size, dilation))
-            in_channels = hidden_dim
-        self.features = nn.Sequential(*blocks)
-        self.pool = nn.AdaptiveAvgPool1d(1)
-        self.classifier = nn.Linear(hidden_dim, 1)
-
-    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
-        return self.pool(self.features(x)).squeeze(-1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.classifier(self.forward_features(x))
-
-
 class ECGTransformer(nn.Module):
     def __init__(
         self,
@@ -207,7 +43,10 @@ class ECGTransformer(nn.Module):
         super().__init__()
         self.patch = nn.Conv1d(channels, embed_dim, kernel_size=patch_size, stride=patch_size)
         layer = nn.TransformerEncoderLayer(
-            d_model=embed_dim, nhead=heads, dim_feedforward=feedforward_dim, batch_first=True
+            d_model=embed_dim,
+            nhead=heads,
+            dim_feedforward=feedforward_dim,
+            batch_first=True,
         )
         self.encoder = nn.TransformerEncoder(layer, num_layers=layers, enable_nested_tensor=False)
         self.classifier = nn.Linear(embed_dim, 1)
@@ -300,7 +139,11 @@ class BiLSTMECG(nn.Module):
             nn.Flatten(),
         )
         self.sequence = nn.LSTM(
-            hidden_dim, hidden_dim, num_layers=layers, batch_first=True, bidirectional=True
+            hidden_dim,
+            hidden_dim,
+            num_layers=layers,
+            batch_first=True,
+            bidirectional=True,
         )
         self.classifier = nn.Linear(hidden_dim * 2, 1)
 
@@ -464,17 +307,19 @@ ARCHITECTURE_CONFIGS = (
     Path(__file__).parent / "CNN/model_set.yaml",
     Path(__file__).parent / "LSTM/model_set.yaml",
     Path(__file__).parent / "Transformer/transformer.yaml",
-    Path(__file__).parent / "Segment_MIL/model_set.yaml",
 )
 
 
 def load_model_parameters(name: str, config_paths: tuple[Path, ...] = ARCHITECTURE_CONFIGS) -> dict:
     """Find the selected model's constructor settings in its architecture YAML."""
-    return load_model_spec(name, config_paths).get("parameters", {})
+    return load_model_spec(name, config_paths)
 
 
 def load_model_spec(name: str, config_paths: tuple[Path, ...] = ARCHITECTURE_CONFIGS) -> dict:
-    """Find full input and constructor metadata for a model in architecture YAML."""
+    """Find experiment hyperparameters for a model in architecture YAML."""
+    if name in {"Segment Attention MIL", "MIL-TCN"}:
+        # Legacy segment-statistics models use their constructor defaults only.
+        return {}
     definitions = {}
     for path in config_paths:
         config = load_yaml(path)

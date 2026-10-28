@@ -22,6 +22,23 @@ from ..tracking.log_evaluation import finish_evaluation
 from .core import binary_metrics, validate_threshold
 
 
+def _dl_artifact_directory(value, config_path: Path) -> Path:
+    path = resolve_config_path(value, config_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Saved DL model path does not exist: {path}")
+    if path.is_file():
+        if path.name != "best_model.pt":
+            raise ValueError(
+                "DL model_path must select the saved run's best_model.pt or its run directory"
+            )
+        path = path.parent
+    required = ("best_model.pt", "metadata.json", "resolved_config.yaml")
+    missing = [name for name in required if not (path / name).is_file()]
+    if missing:
+        raise FileNotFoundError(f"Saved DL run {path} is missing companion files: {missing}")
+    return path
+
+
 def evaluate_saved_model(
     config_path: Path,
     *,
@@ -58,7 +75,19 @@ def evaluate_saved_model(
     if target not in {"ml", "dl"}:
         raise ValueError("evaluation.target must be ml, dl, or fusion")
     artifact_path = evaluation.get("artifact_dir")
-    if artifact_path:
+    if target == "dl":
+        model_path = evaluation.get("model_path")
+        if not model_path and not artifact_path:
+            raise ValueError(
+                "DL evaluation requires evaluation.model_path (or legacy evaluation.artifact_dir)"
+            )
+        artifact_dir = _dl_artifact_directory(model_path or artifact_path, config_path)
+        if model_path and artifact_path:
+            if _dl_artifact_directory(artifact_path, config_path) != artifact_dir:
+                raise ValueError(
+                    "DL model_path and artifact_dir point to different runs; select one model"
+                )
+    elif artifact_path:
         artifact_dir = resolve_config_path(artifact_path, config_path)
     elif target == "ml":
         model_name = evaluation.get("model_name")
@@ -77,14 +106,35 @@ def evaluate_saved_model(
                 f"{parameter_path}: no saved model at model_path for the requested version. "
                 "Train a model or save the best Optuna result before evaluation."
             )
+    raw_dl = False
+    if target == "dl":
+        metadata_path = artifact_dir / "metadata.json"
+        if not metadata_path.is_file():
+            raise FileNotFoundError(f"DL model artifact metadata not found: {metadata_path}")
+        raw_dl = (
+            json.loads(metadata_path.read_text(encoding="utf-8")).get("data_source") == "raw_wave"
+        )
+    raw_usage = None
+    if raw_dl:
+        from ..DL.raw_pipeline import (
+            RAW_USAGE_COLUMNS,
+            load_raw_evaluation_cohort,
+            predict_raw_dl_run,
+        )
+
+        cohorts, window_indices, audit = load_raw_evaluation_cohort(artifact_dir, basic, basic_path)
+        patients = cohorts[split_name]
     else:
-        raise ValueError("DL evaluation requires evaluation.artifact_dir")
-    _, cohorts, audit, window_indices = load_cohorts(basic, basic_path)
-    patients = cohorts[target][split_name]
+        _, cohorts, audit, window_indices = load_cohorts(basic, basic_path)
+        patients = cohorts[target][split_name]
     if patients.empty:
         raise ValueError(f"No {target.upper()} patients are available in {split_name}")
     if target == "ml":
         probabilities, metadata = predict_ml_run(artifact_dir, patients)
+    elif raw_dl:
+        probabilities, metadata, raw_usage = predict_raw_dl_run(
+            artifact_dir, patients, window_indices
+        )
     else:
         probabilities, metadata = predict_dl_run(artifact_dir, patients, window_indices)
     original_threshold = validate_threshold(metadata.get("classification_threshold"))
@@ -113,6 +163,9 @@ def evaluate_saved_model(
     )
     if target == "ml":
         predictions["model_version"] = metadata.get("model_version")
+    if raw_usage is not None:
+        for column in RAW_USAGE_COLUMNS:
+            predictions[column] = [row[column] for row in raw_usage]
     run_name = run_id or f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}_{uuid.uuid4().hex[:8]}"
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", run_name):
         raise ValueError(f"Invalid evaluation run ID {run_name!r}")
@@ -138,6 +191,8 @@ def evaluate_saved_model(
             split_name == "validation" and metadata.get("selection_metric") is not None
         ),
     }
+    if target == "dl":
+        resolved["model_path"] = str(artifact_dir / "best_model.pt")
     (run_dir / "resolved_config.yaml").write_text(
         yaml.safe_dump(resolved, sort_keys=False, allow_unicode=True), encoding="utf-8"
     )

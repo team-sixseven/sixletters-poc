@@ -1,1 +1,1 @@
-"""Local handoff utilities and explicitly enabled best-model MLflow uploads."""
+"""Local handoff and personal-account ML/DL training and evaluation tracking."""

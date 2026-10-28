@@ -4,10 +4,15 @@ param(
     [Parameter(Mandatory = $true)]
     [System.Net.IPAddress[]]$ListenAddress,
     [string]$Distribution = "Ubuntu-24.04",
+    [string[]]$RemoteAddress = @("LocalSubnet"),
     [switch]$Remove
 )
 
 $ErrorActionPreference = "Stop"
+if (-not $Remove -and ($RemoteAddress.Count -eq 0 -or
+    ($RemoteAddress | Where-Object { $_ -in @("Any", "*", "0.0.0.0/0", "::/0") }))) {
+    throw "Specify trusted client subnets instead of unrestricted remote access."
+}
 $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw "Open Windows PowerShell as Administrator, then run this script again."
@@ -60,9 +65,11 @@ foreach ($address in $ListenAddress) {
     if ($null -eq $rule) {
         New-NetFirewallRule -Name $ruleName -DisplayName "SCD MLflow LAN TCP 5000 ($listen)" `
             -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5000 `
-            -LocalAddress $listen -RemoteAddress LocalSubnet -Profile Any | Out-Null
+            -LocalAddress $listen -RemoteAddress $RemoteAddress -Profile Any | Out-Null
+    } else {
+        Set-NetFirewallRule -Name $ruleName -RemoteAddress $RemoteAddress -Enabled True
     }
     $response = Invoke-WebRequest -Uri "http://${listen}:5000/health" -UseBasicParsing -TimeoutSec 10
     if ($response.StatusCode -ne 200) { throw "LAN health check failed." }
-    Write-Host "MLflow LAN endpoint ready: http://${listen}:5000 (LocalSubnet only)"
+    Write-Host "MLflow server checks passed: http://${listen}:5000 (clients: $($RemoteAddress -join ', ')). Verify from a team PC too."
 }

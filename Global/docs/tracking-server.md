@@ -49,6 +49,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu-
 
 스크립트는 Windows의 지정 IP, TCP/5000만 WSL의 TCP/5000으로 전달하고, 해당 포트의 Windows 방화벽 수신을 `LocalSubnet`으로 제한한다. 다른 서비스의 포트 규칙은 바꾸지 않는다. 관리자 권한, Windows IP 소유 여부, WSL health를 먼저 검사하고, 기존에 다른 용도로 사용 중인 포트 전달은 덮어쓰지 않는다. `ExecutionPolicy Bypass`는 이번 PowerShell 프로세스에만 적용한다.
 
+기본 수신 범위는 `LocalSubnet`이며, 라우팅이 허용된 다른 팀 대역까지 필요하면 스크립트의 `-RemoteAddress`에 신뢰하는 서브넷을 명시할 수 있다. 같은 이름으로 생성한 기존 규칙도 이 범위로 갱신한다. 예: `-RemoteAddress "192.168.10.0/24","192.168.50.0/24"`. 이 옵션은 Windows 방화벽만 설정하며 공유기/사내 VLAN 간 통신은 별도로 허용되어 있어야 한다. 연결 해제된 어댑터에 남은 IP는 원격 접속용 주소로 사용할 수 없으며 스크립트도 연결 상태를 검사한다.
+
 팀원은 같은 LAN에서 `http://<Windows-LAN-IP>:5000`에 본인 계정으로 로그인한다. 본인 checkout의 tracking URI도 이 주소로 설정한다. 관리자 비밀번호와 다른 팀원의 비밀번호를 공유하지 않는다. 원격 팀원이 다른 네트워크에 있다면 이 설정만으로 접속할 수 없으며 팀 VPN 또는 별도 HTTPS 구성이 필요하다. 공유기 인터넷 포트포워딩은 이 절차에서 설정하지 않는다.
 
 WSL 또는 Windows 재시작 후 주소가 바뀌면 `.env.tracking` 허용 호스트를 갱신하고 이 스크립트를 다시 실행한다. Windows LAN 주소가 바뀌면 이전 주소의 규칙을 먼저 아래 `-Remove`로 제거한다. 되돌릴 때는 같은 관리자 PowerShell에서 사용한 주소와 함께 `-Remove`를 지정하고, `.env.tracking`의 바인딩을 `127.0.0.1`, 허용 호스트를 `localhost:*,127.0.0.1:*`로 복구한 뒤 서버를 재시작한다. 볼륨은 삭제하지 않는다.

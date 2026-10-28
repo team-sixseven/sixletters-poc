@@ -28,7 +28,9 @@ model/
 │   ├── data/                          # waveform use notes
 │   ├── composed.py                    # CNN window encoder + LSTM/Transformer sequence head
 │   ├── models.py                      # CNN feature encoders
-│   ├── model_choice.yaml              # selected composition and threshold
+│   ├── model_choice.yaml              # selected CNN and temporal model only
+│   ├── raw_pipeline.py                # raw waveform training, artifact checks and inference
+│   ├── TRAINING.md                    # raw training/evaluation steps and verified limits
 │   ├── training.yaml                  # optimizer, epochs, early stopping, device/workers
 │   ├── model_experiment_only_DL.ipynb
 │   ├── CNN/model_set.yaml             # ResNet, InceptionTime, TCN parameters
@@ -41,6 +43,14 @@ model/
     └── results/<target>/<run_id>/     # generated predictions, audit, metrics
 ```
 
+## Current DL configuration and lead handling
+
+The raw DL path uses `DL/data/final_split_v2_augmented.csv` and sample-major NPY files. A single shared one-lead CNN processes every measured lead, then averages measured-lead features per segment before LSTM/Transformer → masked attention MIL → MLP. Lead identity is unavailable in raw files; no cross-patient column correspondence is invented. Batch lead padding and time padding use independent masks and never enter CNN/BatchNorm. Record-length limits are separate from lead count.
+
+Model selection YAML has two keys only. Each model YAML contains flat experiment hyperparameters; no implementation path, input/output shape, feature method or fixed channel count. All models expose structural feature dimensions and dimensions are connected automatically. See [`DL/TRAINING.md`](DL/TRAINING.md) for exact examples and checkpoint format v2 migration. Old fixed-lead DL checkpoints require their original code or retraining; ML model formats are unchanged.
+
+The legacy SQI source described below is separate from raw 30-second waveforms. Its former 2000 samples correspond to the documented 200 Hz/10-second setup, not the raw input length. Current raw sample rate still requires provenance confirmation.
+
 ## Verified data and cohort policy
 
 `basic.yaml` declares data paths and essential schema; `config.py:load_basic_config()` fills shared defaults for split/sidecar columns, filenames, ECG policies, and audit output paths. Relative paths resolve from `basic.yaml` itself, regardless of the current working directory. Current paths are:
@@ -52,17 +62,21 @@ model/
 
 The current `final_split.csv` contains 508 unique patient IDs: 325 train, 81 validation (`val` in the CSV), and 102 test. All 508 IDs match the clinical CSV and their split-file SCD labels agree with the clinical SCD labels. Older ECG cohort counts below this section were produced with a previous split and should be refreshed by rerunning the data audit before relying on modality-specific DL/fusion counts.
 
-The audit writes exact modality patient lists and exclusion reasons. ML uses clinical∩split. DL uses clinical∩split∩valid ECG. Fusion uses the intersection of ML and DL predictions. No patient is moved to a new split. Duplicate IDs, conflicting labels, malformed split values, missing configured features, array shape/dtype errors, and invalid selected windows fail clearly. NPY arrays are memory-mapped; only the configured eight windows are read per patient per batch.
+The audit writes exact modality patient lists and exclusion reasons. ML uses clinical∩split. DL uses clinical∩split∩valid ECG. Fusion uses the intersection of ML and DL predictions. No patient is moved to a new split. Duplicate IDs, conflicting labels, malformed split values, missing configured features, array shape/dtype errors, and invalid selected windows fail clearly. NPY arrays are memory-mapped; only the deterministically selected segments are read per patient per batch.
 
 ## ECG sequence and preprocessing
 
 The sidecar has `pid`, `row`, `win_idx`, `start_sec`, and per-window SQI fields. For the matched cohort, array lengths are checked against sidecar row counts and rows are validated in chronological order without overlap. The inspected records (including P1030) have 10-second `start_sec` intervals; other matched records are checked for chronological non-overlap but are not asserted to have an exact 10-second interval. The source MUSIC Holter recording is documented at 200 Hz, while NPY files themselves carry no sampling-rate metadata. See the [MUSIC source paper](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0186152).
 
-The chosen model sequence is **CNN each selected window → ordered window embeddings → LSTM or Transformer**. It does not flatten the whole NPY. Eight `sqi_pass=1` windows are selected evenly through the recording and kept in chronological order. The dataloader converts to float32 and applies per-window, per-lead z-score normalization. The upstream filtering/normalization history of the NPY values is not recorded in this repository; the local dataloader normalization is explicit in the shared defaults in `config.py`.
+The chosen model sequence is **shared per-lead CNN → measured-lead mean per segment → LSTM or Transformer → masked MIL → MLP**. It does not flatten the whole NPY. `sqi_pass=1` windows are selected up to `training.yaml:max_segments_per_patient` evenly through the recording and kept in chronological order. The dataloader converts to float32 and applies per-window, per-lead z-score normalization. The upstream filtering/normalization history of the NPY values is not recorded in this repository; the local dataloader normalization is explicit in the shared defaults in `config.py`.
 
 The SCD column is used as the supplied binary label without reassigning outcomes. MUSIC publications describe enrollment-time clinical predictors and SCD events observed during follow-up (median follow-up about 44 months); the supplied clean CSV has no event horizon/censoring columns, so these experiments do not claim a fixed-horizon probability or survival analysis. See the [MUSIC study description](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0186152) and [PhysioNet dataset page](https://physionet.org/content/music-sudden-cardiac-death/1.0.1/).
 
 ## Run
+
+ECG + clinical Fusion의 환경 준비, 저장 모델 선택, validation 가중치 설정·학습, 최종 test와 MLflow 기록은 [fusion_manu.md](fusion_manu.md)를 순서대로 따라 실행합니다.
+
+DL 학습 smoke, 전체 학습, checkpoint 확인, test 평가의 단계별 명령은 [`DL/TRAINING.md`](DL/TRAINING.md)에 정리했습니다. `DL.raw_pipeline`은 raw `DL/data/wave` 및 `final_split_v2_augmented.csv`를 사용합니다. 현재 raw source의 sample-rate/channel-order provenance와 quality index가 확인되지 않아 실제 raw 학습은 차단됩니다. 전체 파일과 metadata가 준비되면 노트북과 CLI에서 같은 raw 경로를 실행합니다. 기존 SQI-window trainer도 별도 경로로 유지합니다.
 
 From the repository root, using the `Global` project environment:
 
@@ -108,15 +122,17 @@ uvx --from uv==0.9.26 uv run \
 
    정확한 열 이름과 순서는 [`ML/feature_versions.py`](ML/feature_versions.py)에 있습니다. `model_version`은 입력 묶음 번호이고, `model_name`은 학습 알고리즘 이름입니다.
 
-3. **Optuna 실험 (선택)** 셀로 이동하여 알고리즘과 trial 횟수를 지정합니다.
+3. 입력 버전과 함께 `training_mode="optuna"`, 알고리즘과 trial 횟수, MLflow/평가 플래그를 지정합니다. 일반 학습은 `training_mode="yaml"`로 선택합니다.
 
    ```python
-   model_name = "XGBoost"  # "CatBoost", "Random Forest"도 가능
+   training_mode = "optuna"  # "yaml" 또는 "optuna"
+   model_name = "XGBoost"  # Optuna 알고리즘
    n_trials = 100
-   mlflow_logging = True  # 완료된 best 결과를 이 PC의 MLflow로 전송
+   mlflow_logging = True
+   run_final_test = True  # 후보 비교·튜닝 중이면 False
    ```
 
-4. **탐색 범위와 학습 함수 → 탐색 실행 → 최적 결과 저장 및 확인**의 코드 셀을 순서대로 실행합니다. Optuna만 사용하는 경우 앞의 **학습 실행·결과 확인** 셀은 건너뜁니다. 전체 셀 실행(Run All)은 일반 학습도 실행하므로 이 경로에서는 사용하지 않습니다.
+4. 위에서 아래로 전체 셀을 실행합니다. `training_mode`로 선택한 방식만 학습·기록하고, 마지막 셀은 이번에 선택한 모델을 직접 test 평가·기록합니다. 전송 재시도 셀은 기본 비활성입니다.
 5. 결과 확인 셀에서 `best_run_dir`, `model_version`, `feature_names`, validation AP를 확인합니다. 저장과 YAML 경로 기록은 탐색 실행 셀이 성공적으로 끝날 때 자동 완료됩니다. trial 중에는 원본 YAML을 갱신하지 않습니다.
 
 알고리즘이나 버전을 바꿀 때는 입력 버전 선택 셀과 Optuna 준비 셀부터 다시 실행합니다. **3개 알고리즘 × 4개 버전 = 12개 조합은 각각 별도 study로 실행**합니다. 한 번 실행해서 12개를 자동 탐색하는 노트북은 아닙니다. `n_trials`는 조합별 횟수이고 기본 100회는 시작값이며 최적값 발견을 보장하는 횟수는 아닙니다.
@@ -125,9 +141,9 @@ uvx --from uv==0.9.26 uv run \
 
 `best_parameters.yaml`, `summary.json`, 평가에 필요한 전처리·metadata·설정·validation 예측·지표·완료 상태도 같은 폴더에 저장합니다. trial별 학습 이력과 반복되는 audit 파일은 영구 보관하지 않습니다. 학습 중 모델은 임시 폴더를 사용하며 탐색 완료·실패 시 정리됩니다. 실패하면 이전에 완료된 best 모델은 보존됩니다. 과거 코드로 이미 만든 날짜별 폴더와 검증용 폴더는 자동 삭제하지 않습니다.
 
-이 정책은 Optuna 경로에 적용됩니다. 일반 `train_clinical()`의 고정값 학습은 기존 `models/<run_id>/` 저장 방식을 유지합니다. Optuna만 사용하면 일반 학습 셀은 건너뜁니다. 지정한 버전과 입력 열이 다른 모델은 재사용하지 않습니다.
+이 정책은 Optuna 경로에 적용됩니다. 일반 `train_clinical()`의 고정값 학습은 기존 `models/<run_id>/` 저장 방식을 유지합니다. Optuna를 선택하면 일반 학습 셀은 자동으로 건너뜁니다. 지정한 버전과 입력 열이 다른 모델은 재사용하지 않습니다.
 
-모든 조합은 같은 train/validation/test 환자 배정을 사용합니다. Optuna·입력 버전·threshold 비교는 validation에서 마치고 최종 설정을 고정한 다음 test를 평가합니다. 평가 시 [`evaluation/eval.yaml`](evaluation/eval.yaml)의 기존 설정에서 아래 항목을 맞춥니다.
+모든 조합은 같은 train/validation/test 환자 배정을 사용합니다. 노트북은 `mlflow_logging=True`로 학습을 자동 기록하고 `run_final_test=True`일 때 마지막 셀에서 test 평가도 기록합니다. 후보 비교 중에는 test를 끕니다. 별도 재평가 시 [`evaluation/eval.yaml`](evaluation/eval.yaml)의 기존 설정에서 아래 항목을 맞춥니다.
 
 ```yaml
 evaluation:
@@ -142,11 +158,11 @@ evaluation:
 
 ## YAML and artifacts
 
-- Edit data paths, clinical ID/label columns, ECG shape, sample rate, and windows per patient in `basic.yaml`. Categorical columns, fixed data conventions, and audit paths default in `config.py`; optional YAML overrides are supported.
+- Edit data paths, clinical ID/label columns and verified sample rate in `basic.yaml`; actual array dimensions are inspected at runtime and segment cap is in `DL/training.yaml`. Categorical columns, fixed data conventions, and audit paths default in `config.py`; optional YAML overrides are supported.
 - Select XGBoost, CatBoost, and/or Random Forest in `ML/model_choice.yaml`. Change each model's hyperparameters and `classification.threshold` in its `parameter.yaml`. Clinical features are required to be complete; ML does not impute missing values. XGBoost and Random Forest apply train-fitted scaling/one-hot encoding, while Random Forest has no early stopping and records validation AP for comparison.
 - Model parameter YAMLs include `model_path`. Standard ML execution reuses an existing complete run or trains from YAML when absent. Optuna trains temporary trials, retains one winner per algorithm/version under `models/best/`, and records its path after successful study completion. ML evaluation can use `model_name` with `artifact_dir: null` to read that path without retraining.
-- ML별 `model`, `training`, `classification` parameter key의 역할은 [`ML/PARAMETER_GUIDE.md`](ML/PARAMETER_GUIDE.md)에 정리했습니다.
-- Select `combination`, `cnn_model`, `sequence_model`, and the DL `classification.threshold` in `DL/model_choice.yaml`. Adjust CNN/LSTM/Transformer parameters in their referenced model YAMLs. Training settings live in `DL/training.yaml`.
+- ML별 `model`, `training`, `classification` parameter key의 역할은 [`ML/ML_manu.md`](ML/ML_manu.md)에 정리했습니다.
+- `DL/model_choice.yaml` contains only `cnn_model` and `sequence_model`. Flat model hyperparameters are in the existing CNN/LSTM/Transformer YAMLs; `classification_threshold`, MIL/MLP, batch size and segment cap are in `DL/training.yaml`. Data and `outputs.dl_model_directory` are in `basic.yaml`. Classes, feature interfaces and dimension wiring are managed by code.
 - Ordinary ML training writes a unique run to `ML/models/<run_id>/`; DL writes to `DL/models/<run_id>/`. Optuna updates its managed `ML/models/best/<algorithm>_vN/` directory only after a successful search. XGBoost and CatBoost select their best iteration by validation AP; Random Forest uses its configured tree count and records validation AP for candidate comparison. Test scoring is a separate evaluation step.
 - `fusion.yaml` chooses saved model directories. `mode: manual` checks weights are nonnegative and sum to one; `mode: learn` fits only the scalar fusion weights on validation probabilities; `mode: saved` reuses weights saved by a prior fusion run. Base models and preprocessors are not refit during fusion.
 - `evaluation/eval.yaml` selects `ml`, `dl`, or `fusion`, an explicit validation/test split, optional threshold override, and output path. Threshold overrides change binary decisions and threshold-dependent metrics without retraining or changing saved probabilities.
@@ -157,11 +173,15 @@ Evaluation outputs include patient ID, split, target, positive probability, actu
 
 ## 이 PC의 MLflow 자동 기록
 
+팀원 PC의 개인 계정과 Lab/AX Wi-Fi·유선 접속 설정은 [`tracking/TEAM_MLFLOW.md`](tracking/TEAM_MLFLOW.md)를 따릅니다. Optuna 준비 셀에서 실제 사용할 계정·서버 연결을 먼저 확인합니다.
+
 저장 모델 평가도 `evaluation/eval.yaml`의 `evaluation.mlflow_logging: true`로 자동 기록합니다. 평가 노트북 또는 공통 평가 CLI를 명시적으로 실행하면 별도 run에 `test.*`/`validation.*` 지표를 저장하고 학습 run의 ID·링크를 남깁니다. 환자별 예측·audit은 로컬에만 보관하며, 전송 실패 시 재시도 방법은 [`tracking/LOCAL_MLFLOW.md`](tracking/LOCAL_MLFLOW.md)를 참고하세요.
 
 `http://127.0.0.1:5000`에서 로컬 서버를 실행합니다. ML 노트북의 `mlflow_logging=True` 설정으로 Optuna 탐색 완료 후 최적 모델 하나와 파라미터·validation 지표를 `sang-scd-ml` 실험에 기록합니다. 로그인은 `sang` 계정이며 비밀번호·접속 정보는 Git 제외 파일 `.poc.local.toml`에 있습니다.
 
 노트북 출력 링크 또는 best 폴더 `summary.json`의 `mlflow` 항목에서 결과를 확인합니다. 전송 실패 시 로컬 best를 보존하고 `PENDING`을 표시하며, **MLflow 전송 재시도** 셀로 재학습 없이 다시 전송할 수 있습니다. 각 trial의 모델이나 환자별 예측 CSV는 자동 전송하지 않습니다. 실행·재시도·서버 관리 방법은 [`tracking/LOCAL_MLFLOW.md`](tracking/LOCAL_MLFLOW.md)에 있습니다.
+
+DL 노트북과 통합 fusion 노트북도 각 PC의 개인 계정 설정을 자동 사용합니다. 기본 `mlflow_logging=True`, `run_final_test=True`는 학습/validation 결과와 고정 모델의 test 평가를 별도 MLflow run으로 기록합니다. 모델 비교 중에는 test를 끄고, 오프라인 실행은 logging을 끕니다. 계정 등록·재시도·업로드 범위는 [`tracking/TEAM_MLFLOW.md`](tracking/TEAM_MLFLOW.md)와 [`DL/TRAINING.md`](DL/TRAINING.md)를 참고하세요. 실제 raw 데이터 학습 조건(metadata·품질 index)은 동일하게 적용됩니다.
 
 ## MLflow handoff
 

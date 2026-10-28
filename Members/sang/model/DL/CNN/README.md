@@ -1,3 +1,7 @@
-# CNN 계열
+# Shared-lead CNN feature extractors
 
-실제 구현은 `../models.py`의 `ResNetECG`, `InceptionTimeECG`, `TCNECG`, `RawECGMIL`입니다. 각 raw-window encoder는 `(batch,3,2000)`을 받고 평가기는 환자별 8개 구간 `(batch,8,3,2000)`을 전달합니다. 앞의 세 모델은 구간 logit 평균, Raw ECG MIL은 구간 embedding attention으로 환자 단위 출력을 만듭니다. Architecture 설정은 [`model_set.yaml`](model_set.yaml)에서 읽습니다.
+The actual ResNet, InceptionTime and TCN definitions are in `resnet.py`, `inception_time.py`, and `TCN.py`. Each exposes `forward_features()` and a structural `feature_dim` property. `model_set.yaml` contains flat experiment hyperparameters only; the Python registry in `composed.py` selects the class.
+
+The patient pipeline constructs one shared one-lead encoder. All measured leads use the same weights, and measured-lead features are averaged per segment. Absent leads and invalid windows never enter the CNN or its BatchNorm. It does not rely on lead names or ordering, discard the third lead, or instantiate layers when lead count changes. Historical standalone CNN classification exports remain available through `DL/models.py`.
+
+`model_set.yaml` exposes activation for each model and modules for InceptionTime only. The removed settings keep the former YAML values as constructor defaults: ResNet width 32 / blocks (2, 2); InceptionTime filters 16 / kernels (9, 19, 39); TCN hidden_dim 32 / dilations (1, 2, 4) / kernel_size 3. The constructor arguments remain accepted when restoring existing snapshots that explicitly stored them.
