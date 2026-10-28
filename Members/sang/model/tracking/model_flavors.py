@@ -28,14 +28,16 @@ class ClinicalRunModel:
         if missing:
             raise ValueError(f"Clinical input is missing saved features {missing}")
         frame = inputs.loc[:, feature_names].copy()
+        missing_values = frame.isna().sum()
+        missing_values = missing_values[missing_values > 0].to_dict()
+        if missing_values:
+            raise ValueError(f"Clinical input features contain missing values: {missing_values}")
+        for name in self.metadata["categorical_features"]:
+            frame[name] = frame[name].astype(str)
         artifact_type = self.metadata["artifact_type"]
         if artifact_type in {"xgboost", "random_forest"}:
             frame = self.preprocessor.transform(frame)
-        elif artifact_type == "catboost":
-            missing_value = self.metadata["preprocessing"]["categorical_missing_value"]
-            for name in self.metadata["categorical_features"]:
-                frame[name] = frame[name].astype("string").fillna(missing_value).astype(str)
-        else:
+        elif artifact_type != "catboost":
             raise ValueError(f"Unsupported clinical artifact type {artifact_type!r}")
         probability = np.asarray(self.estimator.predict_proba(frame), dtype=np.float64)
         if probability.ndim != 2 or probability.shape[1] != 2:

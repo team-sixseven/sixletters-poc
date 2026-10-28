@@ -9,39 +9,52 @@ import pandas as pd
 from catboost import CatBoostClassifier
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.impute import SimpleImputer
-from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from xgboost import XGBClassifier
 
+_ESTIMATOR_DEFAULTS = {
+    "XGBoost": {
+        "tree_method": "hist",
+        "random_state": 42,
+        "n_jobs": 1,
+        "verbosity": 0,
+    },
+    "CatBoost": {
+        "random_seed": 42,
+        "verbose": False,
+        "thread_count": 1,
+        "allow_writing_files": False,
+    },
+    "Random Forest": {
+        "max_depth": None,
+        "max_features": "sqrt",
+        "random_state": 42,
+        "n_jobs": 1,
+    },
+}
 
-def make_preprocessor(
-    features: list[str], categorical_features: list[str], config: dict[str, Any]
-) -> ColumnTransformer:
+PREPROCESSING_DEFAULTS = {
+    "numeric_scaling": "standard",
+    "categorical_encoding": "one_hot",
+    "unknown_category": "ignore",
+}
+
+
+def make_preprocessor(features: list[str], categorical_features: list[str]) -> ColumnTransformer:
     categorical = [name for name in categorical_features if name in features]
     numeric = [name for name in features if name not in categorical]
-    if config["categorical_encoding"] != "one_hot":
-        raise ValueError("Only preprocessing.categorical_encoding=one_hot is supported")
-    if config["numeric_scaling"] != "standard":
-        raise ValueError("Only preprocessing.numeric_scaling=standard is supported")
     return ColumnTransformer(
         [
             (
                 "numeric",
-                make_pipeline(
-                    SimpleImputer(strategy=config["numeric_imputation"], keep_empty_features=True),
-                    StandardScaler(),
-                ),
+                StandardScaler(),
                 numeric,
             ),
             (
                 "categorical",
-                make_pipeline(
-                    SimpleImputer(
-                        strategy=config["categorical_imputation"],
-                        fill_value=config["categorical_missing_value"],
-                    ),
-                    OneHotEncoder(handle_unknown=config["unknown_category"], sparse_output=False),
+                OneHotEncoder(
+                    handle_unknown=PREPROCESSING_DEFAULTS["unknown_category"],
+                    sparse_output=False,
                 ),
                 categorical,
             ),
@@ -51,13 +64,13 @@ def make_preprocessor(
     )
 
 
-def prepare_categorical_frame(
-    frame: pd.DataFrame, categorical_features: list[str], missing_value: str
-) -> pd.DataFrame:
+def prepare_categorical_frame(frame: pd.DataFrame, categorical_features: list[str]) -> pd.DataFrame:
     prepared = frame.copy()
     for name in categorical_features:
         if name in prepared:
-            prepared[name] = prepared[name].astype("string").fillna(missing_value).astype(str)
+            if prepared[name].isna().any():
+                raise ValueError(f"Categorical feature {name!r} contains missing values")
+            prepared[name] = prepared[name].astype(str)
     return prepared
 
 
@@ -78,5 +91,5 @@ def build_estimator(name: str, parameters: dict[str, Any]):
     unknown = sorted(set(parameters) - supported)
     if unknown:
         raise ValueError(f"{name} parameter YAML has unsupported model keys: {unknown}")
-    estimator.set_params(**parameters)
+    estimator.set_params(**{**_ESTIMATOR_DEFAULTS[name], **parameters})
     return estimator

@@ -8,16 +8,3 @@ model_configs:
   CatBoost: catboost/parameter.yaml
   Random Forest: random_forest/parameter.yaml
 model_output_dir: models
-feature_columns: all_configured_clinical_features
-preprocessing:
-  numeric_imputation: median
-  numeric_scaling: standard
-  categorical_imputation: constant
-  categorical_missing_value: __MISSING__
-  categorical_encoding: one_hot
-  unknown_category: ignore
-selection:
-  metric: average_precision
-  direction: maximize
-  threshold_metric: f1
-  early_stopping: true

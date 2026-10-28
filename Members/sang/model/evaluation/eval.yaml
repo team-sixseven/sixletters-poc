@@ -2,10 +2,13 @@ basic_config: ../basic.yaml
 evaluation:
   target: fusion
   fusion_config: ../fusion.yaml
-  artifact_dir: ../ML/models/choose_ml_run
+  model_name: XGBoost  # Used for ML when artifact_dir is null.
+  model_version: null  # ML: 1-4 for a saved input set; null uses the latest model_path.
+  artifact_dir: null  # ML: use the selected parameter.yaml model_path; DL: set a run directory.
   split: test
   threshold_override: null
   results_directory: results
+  mlflow_logging: true  # Upload aggregate evaluation results; keep patient predictions local.
   metrics:
     - auroc
     - average_precision

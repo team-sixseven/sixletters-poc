@@ -2,12 +2,52 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+_BASIC_DEFAULTS = {
+    "data": {
+        "clinical": {
+            "categorical_features": [
+                "NYHA class",
+                "Right ventricle contractility (altered=1)",
+                "Mitral valve insufficiency",
+                "Diabetes (yes=1)",
+                "Prior Myocardial Infarction (yes=1)",
+                "Gender (male=1)",
+                "Ischemic etiology",
+            ],
+            "normalize_column_whitespace": True,
+            "target_semantics": (
+                "Provided binary SCD label; prediction time and horizon are not specified "
+                "in the local data dictionary."
+            ),
+        },
+        "split": {
+            "id_column": "pid",
+            "split_column": "split",
+            "values": {"train": "train", "validation": "val", "test": "test"},
+        },
+        "ecg": {
+            "filename_pattern": "{pid}.npy",
+            "patient_id_regex": "^(P[0-9]{4})$",
+            "metadata_id_column": "pid",
+            "metadata_row_column": "row",
+            "metadata_time_column": "start_sec",
+            "metadata_quality_column": "sqi_pass",
+            "sample_rate_status": "assumed_from_source_recording_spec",
+            "window_selection": "evenly_spaced_chronological",
+            "normalization": "per_window_per_lead_zscore",
+            "quality_filter": "sqi_pass_only",
+        },
+    },
+    "outputs": {"audit_directory": "reports/data_audit"},
+}
 
 
 def resolve_config_path(value: str | Path, owner: Path) -> Path:
@@ -31,6 +71,21 @@ def resolve_repo_path(value: str | Path) -> Path:
     return path if path.is_absolute() else REPO_ROOT / path
 
 
+def load_basic_config(path: Path) -> dict[str, Any]:
+    """Resolve shared defaults without mutating defaults or the loaded YAML mapping."""
+
+    def merge(defaults: dict, overrides: dict) -> dict:
+        result = deepcopy(defaults)
+        for key, value in overrides.items():
+            if isinstance(value, dict) and isinstance(result.get(key), dict):
+                result[key] = merge(result[key], value)
+            else:
+                result[key] = value
+        return result
+
+    return merge(_BASIC_DEFAULTS, load_yaml(path))
+
+
 def load_experiment_config(path: Path) -> tuple[dict[str, Any], dict[str, Any], Path, Path]:
     """Load an experiment YAML and its shared basic.yaml reference."""
     experiment_path = path.resolve()
@@ -38,7 +93,7 @@ def load_experiment_config(path: Path) -> tuple[dict[str, Any], dict[str, Any], 
     if "basic_config" not in experiment:
         raise ValueError(f"{experiment_path}: missing required basic_config")
     basic_path = resolve_config_path(experiment["basic_config"], experiment_path)
-    basic = load_yaml(basic_path)
+    basic = load_basic_config(basic_path)
     return experiment, basic, experiment_path, basic_path
 
 

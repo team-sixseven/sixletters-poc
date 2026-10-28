@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from Members.sang.model.config import load_yaml  # noqa: E402
+from Members.sang.model.config import load_basic_config  # noqa: E402
 from Members.sang.model.data import load_cohorts  # noqa: E402
 from Members.sang.model.DL.dataloader.dataset import PatientWindowDataset  # noqa: E402
 from Members.sang.model.evaluation.core import binary_metrics  # noqa: E402
@@ -297,7 +297,7 @@ def main() -> int:
         if args.basic_config.is_absolute()
         else (REPO_ROOT / args.basic_config).resolve()
     )
-    basic = load_yaml(basic_path)
+    basic = load_basic_config(basic_path)
     _, cohorts, audit, indices = load_cohorts(basic, basic_path)
     with tempfile.TemporaryDirectory(prefix="scd-mlflow-flavors-") as flavor_temp:
         flavor_root = Path(flavor_temp)

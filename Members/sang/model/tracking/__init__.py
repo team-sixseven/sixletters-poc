@@ -1,1 +1,1 @@
-"""Local experiment handoff utilities; this package does not contact MLflow."""
+"""Local handoff utilities and explicitly enabled best-model MLflow uploads."""

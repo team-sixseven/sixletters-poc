@@ -1,14 +1,11 @@
-# XGBoost candidate and training settings. Threshold is not an estimator parameter.
+model_path: ../models/best/xgboost_v4/best_model.json
 model:
   n_estimators: 500
   max_depth: 3
   learning_rate: 0.03
-  tree_method: hist
-  random_state: 42
-  n_jobs: 1
-  verbosity: 0
 training:
   early_stopping_rounds: 30
-  seed: 42
 classification:
   threshold: 0.5
+model_paths:
+  4: ../models/best/xgboost_v4/best_model.json

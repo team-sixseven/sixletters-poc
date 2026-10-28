@@ -14,6 +14,14 @@ import pandas as pd
 from .config import resolve_data_path
 
 
+def clinical_feature_columns(frame: pd.DataFrame, id_column: str, label_column: str) -> list[str]:
+    """Use CSV column order, excluding the patient identifier and target."""
+    features = [name for name in frame.columns if name not in {id_column, label_column}]
+    if not features:
+        raise ValueError("Clinical CSV contains no input features after excluding ID and label")
+    return features
+
+
 def _read_clinical(basic: dict[str, Any], basic_path: Path) -> tuple[pd.DataFrame, dict[str, str]]:
     config = basic["data"]["clinical"]
     path = resolve_data_path(config["path"], basic_path)
@@ -28,7 +36,7 @@ def _read_clinical(basic: dict[str, Any], basic_path: Path) -> tuple[pd.DataFram
         raise ValueError(f"{path}: column-name normalization creates duplicates: {duplicated}")
     mapping = dict(zip(original_columns, frame.columns, strict=True))
     id_column, label_column = config["id_column"], config["label_column"]
-    required = {id_column, label_column, *config["feature_columns"]}
+    required = {id_column, label_column, *config["categorical_features"]}
     missing = sorted(required - set(frame.columns))
     if missing:
         raise ValueError(f"{path}: missing configured clinical columns {missing}")
@@ -48,11 +56,16 @@ def _read_clinical(basic: dict[str, Any], basic_path: Path) -> tuple[pd.DataFram
     if labels.isna().any() or not labels.isin([0, 1]).all():
         raise ValueError(f"{path}: {label_column!r} must contain only binary 0/1 labels")
     frame[label_column] = labels.astype("int64")
-    nonnumeric = [
-        name for name in config["feature_columns"] if not pd.api.types.is_numeric_dtype(frame[name])
-    ]
+    features = clinical_feature_columns(frame, id_column, label_column)
+    if not set(config["categorical_features"]).issubset(features):
+        raise ValueError(f"{path}: categorical_features must contain only input feature columns")
+    nonnumeric = [name for name in features if not pd.api.types.is_numeric_dtype(frame[name])]
     if nonnumeric:
         raise ValueError(f"{path}: configured features must be numeric: {nonnumeric}")
+    missing_counts = frame[features].isna().sum()
+    missing_counts = missing_counts[missing_counts > 0].to_dict()
+    if missing_counts:
+        raise ValueError(f"{path}: configured clinical features must be complete: {missing_counts}")
     return frame, mapping
 
 

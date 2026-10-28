@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from model.config import load_yaml, resolve_config_path
+from model.config import load_basic_config, load_yaml, resolve_config_path
 from model.data import load_patient_quality_indices, load_patient_waveform
 from model.DL.composed import build_composed_model
 
@@ -21,7 +21,7 @@ def main() -> int:
     choice_path = model_root / "DL/model_choice.yaml"
     choice = load_yaml(choice_path)
     basic_path = resolve_config_path(choice["basic_config"], choice_path)
-    basic = load_yaml(basic_path)
+    basic = load_basic_config(basic_path)
     patient_id = "P1030"
     ecg = basic["data"]["ecg"]
     patient_file = (

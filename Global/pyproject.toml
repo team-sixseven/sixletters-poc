@@ -19,7 +19,11 @@ dependencies = [
 [project.optional-dependencies]
 ecg = ["wfdb>=4.2,<5", "neurokit2>=0.2.10,<0.3"]
 gpu = ["torch==2.13.0; sys_platform == 'linux' and platform_machine == 'x86_64'"]
-ml = ["xgboost>=2,<4", "catboost>=1.2,<2"]
+ml = [
+    "xgboost>=2,<4",
+    "catboost>=1.2,<2",
+    "optuna>=4,<6",
+]
 
 [project.scripts]
 dev = "sixletters.__main__:main"

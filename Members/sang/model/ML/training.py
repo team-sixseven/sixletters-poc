@@ -18,9 +18,18 @@ from sklearn.metrics import average_precision_score
 from xgboost import callback
 
 from ..config import load_experiment_config, load_yaml, resolve_config_path, resolve_data_path
-from ..data import load_cohorts, write_audit
+from ..data import clinical_feature_columns, load_cohorts, write_audit
 from ..evaluation.core import binary_metrics, validate_threshold
-from .models import build_estimator, make_preprocessor, prepare_categorical_frame
+from .artifacts import configured_model_run, save_model_path
+from .feature_versions import get_feature_columns
+from .models import (
+    PREPROCESSING_DEFAULTS,
+    build_estimator,
+    make_preprocessor,
+    prepare_categorical_frame,
+)
+
+SELECTION_METRIC = "average_precision"
 
 
 def _run_id(name: str, override: str | None) -> str:
@@ -131,8 +140,12 @@ def train_clinical(
     model_names: list[str] | None = None,
     run_id: str | None = None,
     limit_train_patients: int | None = None,
+    model_parameters: dict[str, Any] | None = None,
+    reuse_saved: bool = True,
+    model_version: int | None = None,
+    output_directory: Path | None = None,
 ) -> list[Path]:
-    """Fit selected ML candidates, choose each best iteration by validation AP, and save runs."""
+    """Reuse configured saved runs, or fit YAML parameters; Optuna uses reuse_saved=False."""
     choice, basic, choice_path, basic_path = load_experiment_config(choice_path)
     selected_names = model_names or choice["models"]
     unknown = sorted(set(selected_names) - set(choice["model_configs"]))
@@ -142,19 +155,40 @@ def train_clinical(
         )
     if not selected_names:
         raise ValueError("ML model_choice.yaml models must select at least one model")
-    if (
-        choice["selection"]["metric"] != "average_precision"
-        or choice["selection"]["direction"] != "maximize"
-    ):
-        raise ValueError(
-            "Only selection.metric=average_precision and direction=maximize are supported"
-        )
+    if model_parameters is not None and len(selected_names) != 1:
+        raise ValueError("model_parameters requires exactly one selected ML model")
+    selected_features = None if model_version is None else get_feature_columns(model_version)
+    runs = {}
+    pending = []
+    for model_name in selected_names:
+        parameter_path = resolve_config_path(choice["model_configs"][model_name], choice_path)
+        if reuse_saved:
+            saved_run = configured_model_run(
+                parameter_path, model_name, model_version=model_version
+            )
+            if saved_run is not None:
+                runs[model_name] = saved_run
+                print(
+                    json.dumps({"model": model_name, "source": "saved", "run_dir": str(saved_run)})
+                )
+                continue
+        pending.append((model_name, parameter_path, load_yaml(parameter_path)))
+    if not pending:
+        return [runs[name] for name in selected_names]
     clinical, cohorts, audit, _ = load_cohorts(basic, basic_path)
     train = cohorts["ml"]["train"]
     validation = cohorts["ml"]["validation"]
     if train.empty or validation.empty:
         raise ValueError("ML requires non-empty train and validation intersections")
-    feature_names = list(basic["data"]["clinical"]["feature_columns"])
+    available_features = clinical_feature_columns(
+        clinical, "patient_id", basic["data"]["clinical"]["label_column"]
+    )
+    feature_names = available_features if selected_features is None else selected_features
+    missing_features = sorted(set(feature_names) - set(available_features))
+    if missing_features:
+        raise ValueError(
+            f"model_version={model_version}: missing clinical columns {missing_features}"
+        )
     forbidden = {
         basic["data"]["clinical"]["id_column"],
         basic["data"]["clinical"]["label_column"],
@@ -163,25 +197,40 @@ def train_clinical(
     }
     if forbidden.intersection(feature_names):
         raise ValueError(
-            f"Configured ML feature list contains IDs/target/split: {forbidden & set(feature_names)}"
+            f"Clinical CSV input columns contain IDs/target/split: {forbidden & set(feature_names)}"
         )
-    categorical = list(basic["data"]["clinical"]["categorical_features"])
-    if not set(categorical).issubset(feature_names):
-        raise ValueError("basic.yaml categorical_features must be a subset of feature_columns")
-    output_root = resolve_config_path(choice["model_output_dir"], choice_path)
-    runs = []
-    for model_name in selected_names:
-        parameter_path = resolve_config_path(choice["model_configs"][model_name], choice_path)
-        parameters = load_yaml(parameter_path)
-        for key in ("model", "training", "classification"):
+    categorical = [
+        name for name in basic["data"]["clinical"]["categorical_features"] if name in feature_names
+    ]
+    output_root = (
+        output_directory.resolve()
+        if output_directory is not None
+        else resolve_config_path(choice["model_output_dir"], choice_path)
+    )
+    for model_name, parameter_path, parameters in pending:
+        for key in ("model", "classification"):
             if key not in parameters or not isinstance(parameters[key], dict):
                 raise ValueError(f"{parameter_path}: selected model requires a {key} mapping")
+        if model_parameters is not None:
+            parameters["model"].update(model_parameters)
+            if model_name == "CatBoost":
+                # Remove incompatible YAML defaults when a trial changes the sampling mode.
+                if model_parameters.get("bootstrap_type") == "Bayesian":
+                    parameters["model"].pop("subsample", None)
+                elif model_parameters.get("bootstrap_type") == "Bernoulli":
+                    parameters["model"].pop("bagging_temperature", None)
+                if "auto_class_weights" in model_parameters:
+                    parameters["model"].pop("class_weights", None)
+                    parameters["model"].pop("scale_pos_weight", None)
+        training = parameters.get("training", {})
+        if not isinstance(training, dict):
+            raise ValueError(f"{parameter_path}: training must be a mapping when provided")
         threshold = validate_threshold(parameters["classification"].get("threshold"))
         model_params = dict(parameters["model"])
-        training = parameters["training"]
-        fit_train = _limit_train(train, limit_train_patients, int(training["seed"]))
+        fit_train = _limit_train(train, limit_train_patients, int(training.get("seed", 42)))
         uses_early_stopping = training.get(
-            "early_stopping", choice["selection"].get("early_stopping", False)
+            "early_stopping",
+            model_name in {"XGBoost", "CatBoost"},
         )
         early_stopping = training.get("early_stopping_rounds") if uses_early_stopping else None
         if uses_early_stopping and (not isinstance(early_stopping, int) or early_stopping < 1):
@@ -191,7 +240,9 @@ def train_clinical(
         if model_name in {"XGBoost", "CatBoost"} and not uses_early_stopping:
             raise ValueError(f"{parameter_path}: {model_name} requires validation early stopping")
         name_slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", model_name.lower()).strip("_.-")
-        this_run_id = _run_id(model_name, f"{run_id}_{name_slug}" if run_id else None)
+        if model_version is not None:
+            name_slug = f"{name_slug}_v{model_version}"
+        this_run_id = _run_id(name_slug, f"{run_id}_{name_slug}" if run_id else None)
         run_dir = output_root / this_run_id
         if run_dir.exists():
             raise FileExistsError(
@@ -206,19 +257,20 @@ def train_clinical(
 
         x_train = fit_train[feature_names].copy()
         x_val = validation[feature_names].copy()
-        x_train = prepare_categorical_frame(
-            x_train, categorical, choice["preprocessing"]["categorical_missing_value"]
-        )
-        x_val = prepare_categorical_frame(
-            x_val, categorical, choice["preprocessing"]["categorical_missing_value"]
-        )
+        x_train = prepare_categorical_frame(x_train, categorical)
+        x_val = prepare_categorical_frame(x_val, categorical)
+        for split_name, features in (("train", x_train), ("validation", x_val)):
+            if features.isna().any().any():
+                raise ValueError(f"ML {split_name} features contain missing values")
         y_train = fit_train.y_true.astype(int).to_numpy()
         y_val = validation.y_true.astype(int).to_numpy()
         if len(np.unique(y_val)) != 2:
             raise ValueError("Validation split must contain both classes for model selection")
         estimator = build_estimator(model_name, model_params)
+        # Capture serializable settings before adding runtime metric/callback objects.
+        effective_model_parameters = estimator.get_params(deep=False)
         if model_name in {"XGBoost", "Random Forest"}:
-            preprocessor = make_preprocessor(feature_names, categorical, choice["preprocessing"])
+            preprocessor = make_preprocessor(feature_names, categorical)
             train_matrix = preprocessor.fit_transform(x_train)
             val_matrix = preprocessor.transform(x_val)
             joblib.dump(preprocessor, run_dir / "preprocessing.joblib")
@@ -260,13 +312,8 @@ def train_clinical(
                 val_probability = _positive_probability(estimator, val_matrix)
             feature_output_names = preprocessor.get_feature_names_out().tolist()
         elif model_name == "CatBoost":
-            cat_config = choice["preprocessing"]
-            train_frame = prepare_categorical_frame(
-                x_train, categorical, cat_config["categorical_missing_value"]
-            )
-            val_frame = prepare_categorical_frame(
-                x_val, categorical, cat_config["categorical_missing_value"]
-            )
+            train_frame = x_train
+            val_frame = x_val
             estimator.set_params(eval_metric=_CatBoostAveragePrecision())
             estimator.fit(
                 train_frame,
@@ -298,6 +345,7 @@ def train_clinical(
                 "threshold": threshold,
                 "y_pred": (val_probability >= threshold).astype(int),
                 "model": model_name,
+                "model_version": model_version,
                 "run_id": this_run_id,
             }
         ).to_csv(run_dir / "validation_predictions.csv", index=False)
@@ -311,8 +359,18 @@ def train_clinical(
             },
             "ecg_directory": str(resolve_data_path(basic["data"]["ecg"]["directory"], basic_path)),
             "selected_model": model_name,
+            "model_version": model_version,
             "parameter_file": str(parameter_path),
             "parameters": parameters,
+            "effective_preprocessing": PREPROCESSING_DEFAULTS,
+            "effective_model_parameters": effective_model_parameters,
+            "effective_training_settings": {
+                "seed": int(training.get("seed", 42)),
+                "early_stopping": bool(uses_early_stopping),
+                "early_stopping_rounds": early_stopping,
+                "selection_metric": SELECTION_METRIC,
+                "selection_direction": "maximize",
+            },
             "smoke_train_patient_limit": limit_train_patients,
             "actual_train_patients_used": len(fit_train),
             "feature_names": feature_names,
@@ -321,6 +379,7 @@ def train_clinical(
         _write_yaml(run_dir / "resolved_config.yaml", resolved)
         metadata = {
             "model": model_name,
+            "model_version": model_version,
             "run_id": this_run_id,
             "target_column": basic["data"]["clinical"]["label_column"],
             "target_semantics": basic["data"]["clinical"].get("target_semantics"),
@@ -337,8 +396,8 @@ def train_clinical(
             "positive_class_index": int(np.flatnonzero(np.asarray(estimator.classes_) == 1)[0]),
             "classification_threshold": threshold,
             "best_iteration": best_iteration,
-            "selection_metric": "validation_average_precision",
-            "preprocessing": choice["preprocessing"],
+            "selection_metric": f"validation_{SELECTION_METRIC}",
+            "preprocessing": PREPROCESSING_DEFAULTS,
             "data_audit_counts": audit["counts"],
             "package_versions": {
                 package: importlib.metadata.version(package)
@@ -358,5 +417,7 @@ def train_clinical(
             ),
             encoding="utf-8",
         )
-        runs.append(run_dir)
-    return runs
+        if reuse_saved:
+            save_model_path(parameter_path, run_dir)
+        runs[model_name] = run_dir
+    return [runs[name] for name in selected_names]

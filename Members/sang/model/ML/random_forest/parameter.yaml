@@ -1,14 +1,9 @@
-# Random Forest candidate settings. Validation AP is reported; this estimator has no early stopping.
+model_path: ../models/20261028T010640Z_random_forest_v4_c31f04b0/best_model.joblib
 model:
   n_estimators: 500
-  max_depth: null
   min_samples_leaf: 2
-  max_features: sqrt
   class_weight: balanced
-  random_state: 42
-  n_jobs: 1
-training:
-  early_stopping: false
-  seed: 42
 classification:
   threshold: 0.5
+model_paths:
+  4: ../models/20261028T010640Z_random_forest_v4_c31f04b0/best_model.joblib

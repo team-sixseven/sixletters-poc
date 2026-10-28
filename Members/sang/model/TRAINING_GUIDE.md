@@ -4,7 +4,7 @@
 
 | 실험 | 노트북 | 설정할 YAML | 선행 학습 | 모델·결과 저장 위치 |
 |---|---|---|---|---|
-| Clinical ML | [`ML/model_experiment_only_ML.ipynb`](ML/model_experiment_only_ML.ipynb) | `basic.yaml`, `ML/model_choice.yaml`, 선택한 모델의 `parameter.yaml` | 없음 | `ML/models/<run_id>/` |
+| Clinical ML | [`ML/model_experiment_only_ML.ipynb`](ML/model_experiment_only_ML.ipynb) | `basic.yaml`, `ML/model_choice.yaml`, 선택한 모델의 `parameter.yaml` | 없음 | `ML/models/best/<algorithm>_vN/` (Optuna), `ML/models/<run_id>/` (일반 학습) |
 | ECG DL | [`DL/model_experiment_only_DL.ipynb`](DL/model_experiment_only_DL.ipynb) | `basic.yaml`, `DL/model_choice.yaml`, 선택한 architecture YAML, `DL/training.yaml` | 없음 | `DL/models/<run_id>/` |
 | ECG + clinical 결합 | [`ECG+clinical_experiment.ipynb`](ECG+clinical_experiment.ipynb) | `basic.yaml`, `fusion.yaml` | ML·DL artifact 필요 | `evaluation/results/fusion/<run_id>/` |
 | 저장 모델 평가 | [`evaluation/evaluation_experiment.ipynb`](evaluation/evaluation_experiment.ipynb) 또는 평가 CLI | `basic.yaml`, `evaluation/eval.yaml`, 결합 평가 시 `fusion.yaml` | 평가할 모델 artifact 필요 | `evaluation/results/<ml|dl|fusion>/<run_id>/` |
@@ -13,7 +13,7 @@
 
 ### 1.1 저장소 루트와 Python 환경
 
-모든 아래 명령은 `sixletters-poc/` 저장소 루트에서 실행합니다. `Global/pyproject.toml`과 `Global/uv.lock`이 Python 의존성 기준이며, 프로젝트는 Python 3.12와 `uv==0.9.26`을 요구합니다. ML extra에는 XGBoost·CatBoost, GPU extra에는 Linux x86_64용 PyTorch가 선언되어 있습니다. JupyterLab과 ipykernel은 기본 의존성입니다.
+모든 아래 명령은 `sixletters-poc/` 저장소 루트에서 실행합니다. `Global/pyproject.toml`과 `Global/uv.lock`이 Python 의존성 기준이며, 프로젝트는 Python 3.12와 `uv==0.9.26`을 요구합니다. ML extra에는 XGBoost·CatBoost·Optuna, GPU extra에는 Linux x86_64용 PyTorch가 선언되어 있습니다. JupyterLab과 ipykernel은 기본 의존성입니다.
 
 현재 작업 환경의 `Global/.venv`가 이미 준비되어 있다면 패키지를 다시 설치할 필요는 없습니다. 새로 만들거나 lockfile과 동기화해야 하는 환경에서는 저장소가 고정한 uv 버전을 사용해 다음을 실행합니다.
 
@@ -33,7 +33,7 @@ Global/.venv/bin/python -m ipykernel install --user \
 Global/.venv/bin/jupyter lab
 ```
 
-Jupyter에서 위에 등록한 **Python (sixletters-poc Global)** 커널을 선택합니다. JupyterLab은 저장소 루트에서 시작해야 합니다. 각 노트북은 현재 작업 디렉터리에서 저장소 루트를 찾아 파일 경로를 계산하지만, Python import도 저장소 루트를 기준으로 하므로 다른 위치에서 서버를 시작하면 import가 실패할 수 있습니다.
+Jupyter에서 위에 등록한 **Python (sixletters-poc Global)** 커널을 선택합니다. JupyterLab은 저장소 루트에서 시작하는 것을 권장합니다. ML 노트북의 공통 import 셀은 현재 작업 디렉터리에서 저장소 루트를 찾고 `sys.path`에 등록하므로, 커널 작업 디렉터리가 `ML/`이어도 `Members` import를 사용할 수 있습니다. 다른 노트북은 해당 import 경로 설정을 확인하세요.
 
 uv 버전을 맞춘 환경에서는 같은 작업을 다음처럼 실행할 수 있습니다.
 
@@ -43,34 +43,34 @@ uv run --project Global jupyter lab
 
 ### 1.2 공통 데이터 경로와 스키마
 
-모든 데이터 경로·ID 규칙은 [`basic.yaml`](basic.yaml)에 있습니다. 상대 경로는 **해당 설정을 선언한 YAML 파일의 디렉터리** 기준입니다. 따라서 `basic.yaml`의 `../datas/...`는 `Members/sang/model/`이 아니라 `Members/sang/datas/` 아래를 가리킵니다. 노트북의 실행 위치에 따라 데이터 경로가 바뀌지 않습니다.
+데이터 경로와 주요 스키마는 [`basic.yaml`](basic.yaml)에 있고, 생략된 공통 규칙은 `config.py`의 `load_basic_config()`가 적용합니다. 상대 경로는 **해당 설정을 선언한 YAML 파일의 디렉터리** 기준입니다. 따라서 `basic.yaml`의 `../datas/...`는 `Members/sang/model/`이 아니라 `Members/sang/datas/` 아래를 가리킵니다. 노트북의 실행 위치에 따라 데이터 경로가 바뀌지 않습니다.
 
 기본 데이터 설정은 다음과 같습니다.
 
 ```yaml
 data:
   clinical:
-    path: ../datas/clincal/clinical_clean.csv
+    path: ML/data/clinical_clean.csv
     id_column: Patient ID
     label_column: SCD
   split:
-    path: ../datas/clincal/split_team_v1.csv
-    id_column: pid
-    split_column: split
-    values:
-      train: train
-      validation: validation
-      test: test
+    path: ML/data/final_split.csv
   ecg:
     directory: ../datas/Holter/windows
-    filename_pattern: "{pid}.npy"
+    metadata_path: ../datas/Holter/index/windows.csv.gz
+    sample_rate_hz: 200
+    leads: 3
+    samples_per_window: 2000
+    windows_per_patient: 8
 ```
 
-경로를 옮겼다면 이 파일의 `path` 또는 `directory` 값을 실제 위치에 맞게 바꿉니다. 임상 feature 목록과 categorical feature 목록도 같은 파일에서 관리합니다. `Patient ID`, `SCD`, split 열은 feature 목록에 넣지 않습니다. 임상 CSV 열 이름은 메모리에서 앞뒤 공백을 정리하며, 이 과정에서 중복 열 이름이 생기면 로딩을 중단합니다. 원본 데이터 파일은 수정하지 않습니다.
+경로를 옮겼다면 이 파일의 `path` 또는 `directory` 값을 실제 위치에 맞게 바꿉니다. 입력 feature는 임상 CSV에서 설정된 환자 ID와 라벨 열을 제외한 모든 열을 CSV 순서대로 사용합니다. CSV에는 입력 변수와 ID·라벨만 두고 split 정보는 별도 split CSV로 관리합니다. 범주형 열 7개는 `config.py`의 공통 기본 목록을 사용합니다. 임상 CSV 열 이름은 메모리에서 앞뒤 공백을 정리하며, 이 과정에서 중복 열 이름이 생기면 로딩을 중단합니다. 원본 데이터 파일은 수정하지 않습니다.
+
+Split 열 기본값은 `pid`·`split`이며 CSV의 `val`을 내부 `validation`으로 매핑합니다. sidecar의 `pid`·`row`·`start_sec`·`sqi_pass`, 파일명 규칙, SQI 필터와 정규화는 `config.py`의 공통 기본값입니다.
 
 ECG 파일은 `{pid}.npy` 형식이며 환자 ID 정규식은 `P` 다음 네 자리 숫자입니다. 현재 설정상 배열은 `[window, lead, sample]`, 3개 lead, window당 2000 samples입니다. 200 Hz는 원본 기록 사양에서 가져온 가정이며 NPY 자체에 sampling rate 메타데이터가 저장된 것은 아닙니다. 배열 행은 `windows.csv.gz` sidecar의 환자·row 정보로 맞춥니다. `sqi_pass=0` 구간은 DL 학습에서 제외합니다.
 
-NPY에 dataloader 이전의 필터링·정규화가 적용되었는지는 현재 저장소에서 확인할 수 없습니다. 입력 시 dataloader가 `basic.yaml`의 `per_window_per_lead_zscore`를 적용하는 것은 확인된 동작입니다.
+NPY에 dataloader 이전의 필터링·정규화가 적용되었는지는 현재 저장소에서 확인할 수 없습니다. 입력 시 dataloader가 `config.py` 기본값인 `per_window_per_lead_zscore`를 적용하는 것은 확인된 동작입니다.
 
 현재 audit에서 확인된 규모는 임상 552명, split 708명, NPY 265개입니다. clinical∩split은 508명이고 ML 대상은 train 337명, validation 80명, test 91명입니다. 임상 라벨·split·ECG가 모두 연결된 DL 대상은 총 229명(train 148, validation 36, test 45)입니다. P1030은 split에는 있지만 임상 라벨이 없어 지도학습 대상에 포함되지 않습니다.
 
@@ -88,7 +88,7 @@ uv run --project Global python Members/sang/scripts/audit_model_data.py
 Global/.venv/bin/python Members/sang/scripts/audit_model_data.py
 ```
 
-정상 실행 시 터미널에 `clinical_patients`, `split_patients`, `ecg_patients`, 교집합·제외 환자 수, split별 환자 및 라벨 수가 출력됩니다. 상세 audit 파일은 `basic.yaml`의 `outputs.audit_directory` 아래에 run ID별로 생성됩니다. 환자 ID가 포함된 local 산출물이므로 외부 공유에 주의하세요. 예상보다 환자 수가 적거나 필수 데이터 파일을 못 찾으면 학습으로 넘어가지 말고 경로와 ID·split 매핑부터 확인합니다.
+정상 실행 시 터미널에 `clinical_patients`, `split_patients`, `ecg_patients`, 교집합·제외 환자 수, split별 환자 및 라벨 수가 출력됩니다. 상세 audit 파일은 기본적으로 `model/reports/data_audit/` 아래에 run ID별로 생성됩니다. 경로를 바꾸려면 `basic.yaml`에 `outputs.audit_directory`를 지정합니다. 환자 ID가 포함된 local 산출물이므로 외부 공유에 주의하세요. 예상보다 환자 수가 적거나 필수 데이터 파일을 못 찾으면 학습으로 넘어가지 말고 경로와 ID·split 매핑부터 확인합니다.
 
 ## 2. Clinical 데이터만 사용하는 ML
 
@@ -112,17 +112,31 @@ models:
 
 XGBoost hyperparameter와 threshold는 [`ML/xgboost/parameter.yaml`](ML/xgboost/parameter.yaml), CatBoost 설정은 [`ML/catboost/parameter.yaml`](ML/catboost/parameter.yaml)에 있습니다. 예를 들어 XGBoost의 `model.n_estimators`, `model.max_depth`, `training.early_stopping_rounds`, `classification.threshold`를 바꿉니다. CatBoost에서는 `model.iterations`, `model.depth`, `training.early_stopping_rounds`, `classification.threshold`를 바꿉니다. Random Forest는 [`ML/random_forest/parameter.yaml`](ML/random_forest/parameter.yaml)을 사용하며 설정한 tree 수로 학습합니다. Random Forest에는 early stopping이 없습니다.
 
-전처리는 train split에서만 fit됩니다. XGBoost와 Random Forest는 수치형 결측치 대체·표준화와 범주형 결측치 대체·one-hot encoding을 사용합니다. CatBoost는 YAML에 지정된 categorical columns를 문자열 범주형으로 전달합니다.
+임상 입력 feature에 결측값이 있으면 audit에서 오류로 중단하며, 어떤 모델도 결측값을 대체하지 않습니다. 전처리는 train split에서만 fit됩니다. XGBoost와 Random Forest는 수치형 표준화와 범주형 one-hot encoding을 적용합니다. CatBoost는 공통 설정 로더가 제공하는 범주형 열을 문자열 범주형으로 전달합니다.
 
 ### 2.2 노트북 학습
 
 Jupyter에서 `ML/model_experiment_only_ML.ipynb`를 열고 셀을 위에서 아래 순서대로 실행합니다.
 
 1. 첫 코드 셀에서 저장소 루트, `choice_path`, trainer import를 준비합니다.
-2. `## 학습 실행` 다음 코드 셀에서 `train_clinical(choice_path)`를 실행합니다. YAML의 `models`에 선택된 각 모델을 학습합니다.
-3. `## 결과 확인` 다음 셀에서 각 run ID, validation prediction 일부와 validation metrics를 확인합니다.
+2. `## 입력 변수 버전 선택`에서 `model_version`을 1~4 중 하나로 설정합니다. 입력 개수는 각각 4·8·21·23개이고 기본값은 4입니다. 정확한 목록은 `ML/feature_versions.py`에 있습니다.
+3. `## 학습 실행` 다음 코드 셀에서 `train_clinical(choice_path, model_version=model_version)`를 실행합니다. YAML의 `models`에 선택된 각 모델을 처리합니다. 선택한 버전과 입력 열이 일치하는 저장 run이 있으면 재사용하고, 없으면 해당 변수 목록과 YAML 파라미터로 학습합니다. 버전별 경로는 `model_paths`에 기록합니다.
+4. `## 결과 확인` 다음 셀에서 각 run ID, validation prediction 일부와 validation metrics를 확인합니다.
 
 학습 결과는 노트북 셀의 `run_dirs`에 표시되고 각 run의 `run_status.json`은 완료 시 `COMPLETE`가 됩니다. XGBoost·CatBoost는 validation Average Precision 기준 best iteration을 저장합니다. Random Forest는 설정한 tree 수를 사용하고 validation AP를 기록합니다. Test split은 학습에 사용되지 않습니다.
+
+### 2.2.1 Optuna로 하이퍼파라미터 탐색
+
+같은 ML 노트북에서 공통 import와 입력 변수 버전 선택 셀을 실행한 뒤 `## Optuna 실험 (선택)`으로 이동합니다. `model_name`은 알고리즘, `model_version`은 입력 변수 묶음입니다. 각 버전은 별도 Optuna study로 비교합니다. YAML 고정값 학습을 원하지 않으면 앞의 일반 학습·결과 확인 셀은 건너뜁니다.
+
+1. `model_name`에 `XGBoost`, `CatBoost`, `Random Forest` 중 하나를 지정하고 `n_trials`를 정합니다. 확장 탐색의 기본값은 100회입니다. `mlflow_logging=True`이면 탐색 완료 시 best 하나를 로컬 MLflow에 전송합니다. 접속 정보는 `.poc.local.toml`에서 읽으며 노트북에 비밀번호를 적지 않습니다.
+2. `## 탐색 범위와 학습 함수` 아래의 `objective(trial)` 셀에서 모델별 범위를 확인합니다.
+3. `## 탐색 실행` 셀을 실행합니다. train으로 학습하고 validation AP를 최대화하며 trial 중에는 원본 YAML과 환자 split을 변경하지 않습니다. 기존 모델 경로가 있어도 `reuse_saved=False`로 새 trial을 학습합니다. Threshold와 조기 종료 횟수는 모델 YAML 값을 유지합니다.
+4. `## 최적 결과 저장 및 확인` 셀에서 결과를 확인합니다. 저장은 직전 탐색 실행 셀에서 자동 완료되며, `best_run_dir`가 선택된 모델 경로입니다. 새 탐색은 Optuna 준비 셀부터 다시 실행합니다.
+
+각 trial은 임시 폴더에서 학습하고 정리하며 현재 best 후보 하나만 유지합니다. 탐색 완료 시 최적 모델 하나와 `trials.csv`, `best_parameters.yaml`, `summary.json` 및 평가용 파일을 `ML/models/best/<algorithm>_vN/`에 저장합니다. 반복 실행 시 같은 조합의 저장 폴더를 새 study best로 갱신합니다. 실패하면 이전 모델은 보존합니다. 탐색 실행 셀에서 원본 YAML의 최신 `model_path`와 버전별 `model_paths`도 자동 갱신하고 기본 파라미터 값은 유지합니다. 선택이 끝나면 `evaluation/eval.yaml`에서 `target: ml`, 선택한 `model_name`과 `model_version`, `artifact_dir: null`, `split: test`로 평가합니다. 명시적인 `artifact_dir`를 사용해 `best_run_dir`를 지정할 수도 있습니다. Test 결과로 Optuna trial이나 threshold를 고르지 않습니다.
+
+Optuna는 프로젝트의 `ml` extra에 포함되어 있습니다. 기존 환경에 없을 때는 저장소가 요구하는 uv 버전으로 `uv sync --project Global --locked --extra ml --inexact`를 실행하고 Jupyter 커널을 재시작합니다. 이 예시는 탐색 재개용 DB나 pruning 없이 순차 실행합니다.
 
 ### 2.3 같은 학습의 명령행 실행
 
@@ -152,7 +166,7 @@ Global/.venv/bin/python Members/sang/scripts/evaluate_preprocessed_clinical.py \
 
 ### 2.4 ML 산출물 확인과 저장 모델 평가
 
-ML 모델은 [`ML/models/`](ML/models/) 아래 모델별 run 폴더에 저장됩니다. 지정한 `--run-id clinical_rf`의 경우 예를 들어 `ML/models/clinical_rf_random_forest/`입니다. 기본 실행은 자동 생성 run ID를 사용합니다. XGBoost는 `best_model.json`과 `preprocessing.joblib`, CatBoost는 `best_model.cbm`, Random Forest는 `best_model.joblib`과 `preprocessing.joblib`을 저장합니다. 각 run에는 `metadata.json`, `resolved_config.yaml`, `metrics.json`, `validation_predictions.csv`, `training_history.csv`, `run_status.json`, `data_audit/`도 포함됩니다.
+Optuna 최적 모델은 [`ML/models/`](ML/models/) 아래 `best/<algorithm>_vN/`에 한 개씩 저장됩니다. 일반 YAML 고정값 학습은 같은 위치의 고유 run 폴더에 저장됩니다. 지정한 `--run-id clinical_rf`의 경우 예를 들어 `ML/models/clinical_rf_random_forest/`입니다. 기본 실행은 자동 생성 run ID를 사용합니다. XGBoost는 `best_model.json`과 `preprocessing.joblib`, CatBoost는 `best_model.cbm`, Random Forest는 `best_model.joblib`과 `preprocessing.joblib`을 저장합니다. 일반 학습 run에는 `metadata.json`, `resolved_config.yaml`, `metrics.json`, `validation_predictions.csv`, `training_history.csv`, `run_status.json`, `data_audit/`가 포함됩니다. Optuna 최적 모델은 평가에 필요한 앞의 metadata·설정·지표·validation 예측·상태와 전처리를 유지하고 `training_history.csv`, `data_audit/`는 보관하지 않습니다.
 
 다음 단계에 전달할 정확한 run 경로는 학습 명령의 `training_runs` 출력, 노트북의 `run_dirs`, 또는 `ML/models/`의 생성 시각이 포함된 run 폴더명에서 확인합니다. 임의로 경로를 추측하지 말고 완료된 run의 `metadata.json`과 `run_status.json`을 확인합니다.
 
@@ -161,12 +175,14 @@ ML 모델은 [`ML/models/`](ML/models/) 아래 모델별 run 폴더에 저장됩
 ```yaml
 evaluation:
   target: ml
-  artifact_dir: ../ML/models/clinical_rf_random_forest
+  model_name: Random Forest
+  model_version: 4
+  artifact_dir: null
   split: validation
   threshold_override: null
 ```
 
-`artifact_dir`는 `eval.yaml` 파일 위치인 `model/evaluation/` 기준 상대 경로입니다. 설정을 저장한 뒤 저장소 루트에서 평가 모듈을 실행합니다.
+`artifact_dir: null`이면 `model_name`에 연결된 parameter YAML의 `model_path`를 읽습니다. 저장 모델이 없으면 먼저 일반 학습이나 Optuna 결과 저장을 실행해야 합니다. 특정 run을 지정하려면 `artifact_dir`를 `eval.yaml` 파일 위치인 `model/evaluation/` 기준 상대 경로로 설정합니다. 설정을 저장한 뒤 저장소 루트에서 평가 모듈을 실행합니다.
 
 ```bash
 uv run --project Global --extra ml --extra gpu python -m Members.sang.model.evaluation.evaluation \
@@ -179,7 +195,7 @@ uv run --project Global --extra ml --extra gpu python -m Members.sang.model.eval
 
 ### 3.1 ECG·라벨·split 연결
 
-먼저 공통 audit를 완료합니다. DL 지도학습에는 `clinical_clean.csv`의 `Patient ID`·`SCD`, `split_team_v1.csv`의 `pid`·`split`, 환자별 NPY와 `windows.csv.gz` sidecar의 환자·row가 모두 연결되어야 합니다. 누락 ECG, 임상 라벨, sidecar 또는 SQI 통과 window가 없는 경우 해당 modality 대상에서 빠지며 audit에서 사유를 확인합니다. P1030처럼 임상 라벨이 없는 환자는 파형 forward 점검에만 사용할 수 있습니다.
+먼저 공통 audit를 완료합니다. DL 지도학습에는 `clinical_clean.csv`의 `Patient ID`·`SCD`, `ML/data/final_split.csv`의 `pid`·`split` (파일의 `val`은 내부 `validation`으로 매핑), 환자별 NPY와 `windows.csv.gz` sidecar의 환자·row가 모두 연결되어야 합니다. 누락 ECG, 임상 라벨, sidecar 또는 SQI 통과 window가 없는 경우 해당 modality 대상에서 빠지며 audit에서 사유를 확인합니다. P1030처럼 임상 라벨이 없는 환자는 파형 forward 점검에만 사용할 수 있습니다.
 
 기본 dataloader는 SQI 통과 window 중 8개를 기록 전체에서 시간 순으로 고르게 선택하고, 각 window·lead에 z-score를 적용합니다. NPY 원본과 CSV는 수정하지 않습니다.
 
@@ -384,5 +400,7 @@ uv run --project Global python Members/sang/model/evaluation/evaluate_prediction
 - **uv 실행 오류:** `Global/pyproject.toml`의 required uv 0.9.26과 실행 중인 버전을 확인합니다. 현재 검토 환경의 uv 0.12.3에서는 `uv run --project Global`이 버전 불일치로 실패했습니다.
 
 ## 8. 현재 문서 범위의 제약
+
+공통 평가 진입점(`evaluation/evaluation.py` 및 이를 호출하는 평가 노트북)은 `evaluation/eval.yaml`의 `evaluation.mlflow_logging: true`일 때 로컬 저장 후 집계 지표와 실행 설정을 별도 MLflow run으로 전송합니다. Test는 모델·threshold 확정 후 명시적으로 평가하며 Optuna가 자동 실행하지 않습니다. `test.*`/`validation.*` 지표와 `source_run_id`, 가능한 경우 `source_mlflow_url`로 평가와 학습을 연결합니다. 실패 시 로컬 결과 폴더의 `mlflow_status.json`을 확인하고 [`tracking/LOCAL_MLFLOW.md`](tracking/LOCAL_MLFLOW.md)의 전송 재시도를 사용하세요. 환자별 예측과 audit은 업로드하지 않습니다. ML·DL·Fusion 공통 평가 경로를 지원하지만 이번 연동의 실제 실행 검증은 Random Forest ML test 평가로 수행했습니다.
 
 전체 학습 또는 장시간 실험은 이 가이드를 작성하면서 실행하지 않았습니다. CLI `--help`, notebook 셀 흐름, YAML 키와 저장 경로를 코드와 대조했습니다. 새 ML/DL run을 기존 MLflow handoff bundle로 자동 변환하는 연결은 현재 별도 상태이며, 자세한 내용은 [`tracking/MLFLOW_HANDOFF.md`](tracking/MLFLOW_HANDOFF.md)를 확인하세요.

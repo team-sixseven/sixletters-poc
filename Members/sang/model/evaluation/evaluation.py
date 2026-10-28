@@ -13,10 +13,12 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from ..config import load_experiment_config, resolve_config_path
+from ..config import load_experiment_config, load_yaml, resolve_config_path
 from ..data import load_cohorts, write_audit
 from ..fusion import run_fusion
 from ..inference import predict_dl_run, predict_ml_run
+from ..ML.artifacts import configured_model_run
+from ..tracking.log_evaluation import finish_evaluation
 from .core import binary_metrics, validate_threshold
 
 
@@ -43,16 +45,40 @@ def evaluate_saved_model(
     output_base = resolve_config_path(evaluation["results_directory"], config_path)
     if target == "fusion":
         fusion_path = resolve_config_path(evaluation["fusion_config"], config_path)
-        return run_fusion(
+        fusion_output = run_fusion(
             fusion_path,
             split_name=split_name,
             run_id=run_id,
             threshold_override=explicit_override,
             output_root=output_base / "fusion",
         )
+        return finish_evaluation(
+            fusion_output, mlflow_logging=evaluation.get("mlflow_logging", False)
+        )
     if target not in {"ml", "dl"}:
         raise ValueError("evaluation.target must be ml, dl, or fusion")
-    artifact_dir = resolve_config_path(evaluation["artifact_dir"], config_path)
+    artifact_path = evaluation.get("artifact_dir")
+    if artifact_path:
+        artifact_dir = resolve_config_path(artifact_path, config_path)
+    elif target == "ml":
+        model_name = evaluation.get("model_name")
+        choice_path = Path(__file__).resolve().parents[1] / "ML/model_choice.yaml"
+        if evaluation.get("model_choice"):
+            choice_path = resolve_config_path(evaluation["model_choice"], config_path)
+        choice = load_yaml(choice_path)
+        if model_name not in choice["model_configs"]:
+            raise ValueError("evaluation.model_name must name an ML model in model_choice.yaml")
+        parameter_path = resolve_config_path(choice["model_configs"][model_name], choice_path)
+        artifact_dir = configured_model_run(
+            parameter_path, model_name, model_version=evaluation.get("model_version")
+        )
+        if artifact_dir is None:
+            raise FileNotFoundError(
+                f"{parameter_path}: no saved model at model_path for the requested version. "
+                "Train a model or save the best Optuna result before evaluation."
+            )
+    else:
+        raise ValueError("DL evaluation requires evaluation.artifact_dir")
     _, cohorts, audit, window_indices = load_cohorts(basic, basic_path)
     patients = cohorts[target][split_name]
     if patients.empty:
@@ -71,6 +97,8 @@ def evaluate_saved_model(
     metrics["threshold_applied"] = applied_threshold
     metrics["threshold_overridden"] = explicit_override is not None
     metrics["average_precision_definition"] = "sklearn.metrics.average_precision_score"
+    if target == "ml":
+        metrics["model_version"] = metadata.get("model_version")
     predictions = pd.DataFrame(
         {
             "patient_id": patients.patient_id.astype(str),
@@ -83,6 +111,8 @@ def evaluate_saved_model(
             "run_id": metadata["run_id"],
         }
     )
+    if target == "ml":
+        predictions["model_version"] = metadata.get("model_version")
     run_name = run_id or f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}_{uuid.uuid4().hex[:8]}"
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", run_name):
         raise ValueError(f"Invalid evaluation run ID {run_name!r}")
@@ -111,7 +141,7 @@ def evaluate_saved_model(
     (run_dir / "resolved_config.yaml").write_text(
         yaml.safe_dump(resolved, sort_keys=False, allow_unicode=True), encoding="utf-8"
     )
-    return run_dir
+    return finish_evaluation(run_dir, mlflow_logging=evaluation.get("mlflow_logging", False))
 
 
 def main() -> int:

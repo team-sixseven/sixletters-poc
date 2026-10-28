@@ -2,6 +2,8 @@
 
 ## 준비 상태
 
+Optuna 완료 직후 이 PC의 MLflow에 best 결과를 기록하는 경로는 [`LOCAL_MLFLOW.md`](LOCAL_MLFLOW.md)에 있습니다. 아래는 별도로 제공하는 bundle 생성·전달·명시적 업로드 절차입니다.
+
 `export_runs.py`가 완료된 ML/DL 학습 run을 현재 importer가 읽는 contract v3 bundle로 변환합니다. exporter는 현재 환자 split을 다시 읽고 저장된 validation 예측과 모델 재추론 결과의 환자 ID·라벨·Average Precision을 대조합니다. ML 후보 여러 개 중 validation Average Precision이 가장 높은 한 모델에만 test 예측과 지표를 붙입니다. DL은 전달받은 단일 run을 test에서 평가합니다. threshold는 해당 run metadata의 학습 당시 값을 사용합니다.
 
 bundle은 로컬에서 생성하고 검증할 뿐 자동 업로드하지 않습니다. MLflow 담당자는 개인정보 업로드 정책 및 승인된 tracking URI를 확인한 뒤 importer의 `--upload`만 별도로 실행합니다. bundle prediction CSV에는 환자 ID, 정답, 점수가 포함되므로 팀에서 허용한 위치에 보관하고 승인되지 않은 서버로 올리지 마세요. 원본 CSV, split CSV, NPY waveform은 bundle에 포함되지 않습니다.

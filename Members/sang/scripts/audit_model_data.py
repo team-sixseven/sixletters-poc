@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from model.config import load_yaml, resolve_data_path
+from model.config import load_basic_config, resolve_data_path
 from model.data import load_cohorts, write_audit
 
 
@@ -24,7 +24,7 @@ def main() -> int:
     parser.add_argument("--run-id")
     args = parser.parse_args()
     basic_path = args.basic_config.resolve()
-    basic = load_yaml(basic_path)
+    basic = load_basic_config(basic_path)
     _, _, audit, _ = load_cohorts(basic, basic_path)
     run_id = args.run_id or f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}_{uuid.uuid4().hex[:8]}"
     output = resolve_data_path(basic["outputs"]["audit_directory"], basic_path) / run_id
