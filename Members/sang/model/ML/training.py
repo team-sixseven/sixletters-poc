@@ -297,7 +297,6 @@ def train_clinical(
             if model_name == "XGBoost":
                 estimator.set_params(
                     eval_metric=_xgboost_average_precision,
-                    early_stopping_rounds=early_stopping,
                     callbacks=[
                         callback.EarlyStopping(
                             rounds=early_stopping,

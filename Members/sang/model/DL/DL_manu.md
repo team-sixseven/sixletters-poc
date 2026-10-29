@@ -269,13 +269,13 @@ mil:
 | `weight_decay` | 가중치 감쇠 |
 | `batch_size` | 한 배치의 환자 수 |
 | `epochs` | 최대 epoch; early stopping으로 먼저 끝날 수 있음 |
-| `early_stopping` | validation AP 개선 여부를 기다리는 조건 |
+| `early_stopping` | validation BCE loss 감소 여부를 기다리는 조건 |
 | `max_segments_per_patient` | 환자당 사용할 최대 유효 구간 수 |
 | `device` | auto / cpu / cuda |
 | `classifier.activation` | 최종 MLP의 히든 레이어 활성화 함수 |
 | `classification_threshold` | 확률을 이진 예측으로 바꾸는 기준 |
 
-모델은 환자 logit과 `BCEWithLogitsLoss`로 학습하고, 추론·평가에서 sigmoid를 한 번 적용합니다. 클래스 보정값은 train label만으로 계산하며 best checkpoint는 validation Average Precision으로 선택합니다.
+모델은 환자 logit과 `BCEWithLogitsLoss`로 학습하고, 추론·평가에서 sigmoid를 한 번 적용합니다. 클래스 보정값은 train label만으로 계산하며 best checkpoint는 validation BCE loss 최소값으로 선택합니다.
 
 구간 cap 128은 유도 수나 구간 내 sample 수가 아닙니다. 유효 구간 전체에서 최대 128개를 균등 간격으로 선택하고 원래 순서·위치를 보존합니다. 전체 기록을 항상 모두 사용하는 것은 아니며 실제 사용 구간은 결과 CSV에 남습니다.
 

@@ -15,9 +15,7 @@ import yaml
 
 from ..config import load_experiment_config, load_yaml, resolve_config_path
 from ..data import load_cohorts, write_audit
-from ..fusion import run_fusion
-from ..inference import predict_dl_run, predict_ml_run
-from ..ML.artifacts import configured_model_run
+from ..ML.artifacts import configured_model_run, predict_ml_run
 from ..tracking.log_evaluation import finish_evaluation
 from .core import binary_metrics, validate_threshold
 
@@ -61,6 +59,8 @@ def evaluate_saved_model(
     target = evaluation["target"]
     output_base = resolve_config_path(evaluation["results_directory"], config_path)
     if target == "fusion":
+        from ..fusion import run_fusion
+
         fusion_path = resolve_config_path(evaluation["fusion_config"], config_path)
         fusion_output = run_fusion(
             fusion_path,
@@ -136,6 +136,8 @@ def evaluate_saved_model(
             artifact_dir, patients, window_indices
         )
     else:
+        from ..inference import predict_dl_run
+
         probabilities, metadata = predict_dl_run(artifact_dir, patients, window_indices)
     original_threshold = validate_threshold(metadata.get("classification_threshold"))
     applied_threshold = original_threshold if explicit_override is None else explicit_override

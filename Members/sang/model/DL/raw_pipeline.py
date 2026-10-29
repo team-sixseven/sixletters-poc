@@ -268,7 +268,7 @@ def train_raw_ecg(
     )
 
     history = []
-    best_score, best_epoch, stale = float("-inf"), None, 0
+    best_score, best_epoch, stale = float("inf"), None, 0
     patience = int(training["early_stopping"]["patience"])
     min_delta = float(training["early_stopping"]["min_delta"])
     for epoch in tqdm(range(1, epochs + 1), desc="DL epochs", unit="epoch"):
@@ -307,8 +307,8 @@ def train_raw_ecg(
         history.append(record)
         pd.DataFrame(history).to_csv(run_dir / "training_history.csv", index=False)
         print(json.dumps(record))
-        if val_ap > best_score + min_delta:
-            best_score, best_epoch, stale = val_ap, epoch, 0
+        if val_loss < best_score - min_delta:
+            best_score, best_epoch, stale = val_loss, epoch, 0
             torch.save(
                 {
                     "format_version": MODEL_FORMAT_VERSION,
@@ -316,7 +316,7 @@ def train_raw_ecg(
                         key: value.detach().cpu() for key, value in model.state_dict().items()
                     },
                     "best_epoch": best_epoch,
-                    "best_validation_average_precision": best_score,
+                    "best_validation_loss": best_score,
                 },
                 run_dir / "best_model.pt",
             )
@@ -325,13 +325,14 @@ def train_raw_ecg(
         if stale >= patience:
             break
     if best_epoch is None:
-        raise RuntimeError("No validation checkpoint was selected")
+        raise RuntimeError("No validation-loss checkpoint was selected")
 
     checkpoint = torch.load(run_dir / "best_model.pt", map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["state_dict"])
     val_y, val_probability, val_ids, val_usage, _ = _predict(model, validation_loader, device)
     val_metrics = binary_metrics(val_y, val_probability, threshold)
     val_metrics["selection_metric"] = best_score
+    val_metrics["selection_metric_name"] = "validation_loss"
     val_metrics["threshold_source"] = "DL/training.yaml classification_threshold"
     pd.DataFrame(
         {
@@ -403,7 +404,7 @@ def train_raw_ecg(
         "best_epoch": best_epoch,
         "completed_epochs": len(history),
         "device": str(device),
-        "selection_metric": "validation_average_precision",
+        "selection_metric": "validation_loss",
         "positive_class_weight": positive_weight,
         "actual_train_patients_used": len(train_frame),
         "package_versions": {

@@ -86,7 +86,7 @@ uv run --project Global --extra gpu python Members/sang/scripts/evaluate_ecg_arc
 uv run --project Global python -m Members.sang.model.evaluation.evaluation
 ```
 
-The compatibility-named clinical and ECG scripts now call the configured trainers. Training selects checkpoints using validation Average Precision and does not evaluate test. Small real-data smoke options are available as `--limit-train-patients 32` for ML and `--max-epochs 1 --limit-train-patients 16 --device cpu` for DL. These produce test-only local artifacts and are not full cohort models.
+The compatibility-named clinical and ECG scripts now call the configured trainers. ML selects boosting iterations using validation Average Precision; DL selects checkpoints using validation BCE loss. Training does not evaluate test. Small real-data smoke options are available as `--limit-train-patients 32` for ML and `--max-epochs 1 --limit-train-patients 16 --device cpu` for DL. These produce test-only local artifacts and are not full cohort models.
 
 Run all nine supported encoder/head combinations on real, unlabeled P1030 windows:
 

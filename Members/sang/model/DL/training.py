@@ -67,9 +67,10 @@ def _loader(dataset, *, batch_size: int, shuffle: bool, workers: int, pin_memory
 
 
 @torch.inference_mode()
-def _predict(model, loader, device) -> tuple[np.ndarray, np.ndarray, list[str]]:
+def _predict(model, loader, device, criterion=None):
     model.eval()
     probabilities, labels, patient_ids = [], [], []
+    loss_sum, loss_count = 0.0, 0
     for ids, waveforms, targets, mask, positions, lead_presence in loader:
         logits = model(
             waveforms.to(device, non_blocking=device.type == "cuda"),
@@ -82,10 +83,18 @@ def _predict(model, loader, device) -> tuple[np.ndarray, np.ndarray, list[str]]:
         probability = torch.sigmoid(logits[:, 0])
         if not torch.isfinite(probability).all():
             raise ValueError("DL model returned NaN/Inf probabilities")
+        if criterion is not None:
+            targets_device = targets.to(device, non_blocking=device.type == "cuda")
+            loss = criterion(logits[:, 0], targets_device)
+            loss_sum += float(loss.cpu()) * len(ids)
+            loss_count += len(ids)
         probabilities.extend(probability.cpu().numpy().tolist())
         labels.extend(targets.numpy().tolist())
         patient_ids.extend(list(ids))
-    return np.asarray(labels, dtype=np.int64), np.asarray(probabilities), patient_ids
+    result = (np.asarray(labels, dtype=np.int64), np.asarray(probabilities), patient_ids)
+    if criterion is not None:
+        return (*result, loss_sum / loss_count)
+    return result
 
 
 def _small_train_subset(frame: pd.DataFrame, limit: int | None, seed: int) -> pd.DataFrame:
@@ -219,7 +228,7 @@ def train_holter(
     write_audit(audit, run_dir / "data_audit")
 
     history = []
-    best_score = float("-inf")
+    best_score = float("inf")
     best_epoch = None
     stale_epochs = 0
     patience = int(training["early_stopping"]["patience"])
@@ -242,18 +251,21 @@ def train_holter(
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
             losses.append(float(loss.detach().cpu()))
-        val_y, val_probability, val_ids = _predict(model, validation_loader, device)
+        val_y, val_probability, val_ids, val_loss = _predict(
+            model, validation_loader, device, criterion
+        )
         val_ap = float(average_precision_score(val_y, val_probability))
         row = {
             "epoch": epoch,
             "training_loss": float(np.mean(losses)),
             "validation_average_precision": val_ap,
+            "validation_loss": val_loss,
             "validation_patients": len(val_ids),
         }
         history.append(row)
         print(json.dumps(row, ensure_ascii=False))
-        if val_ap > best_score + min_delta:
-            best_score = val_ap
+        if val_loss < best_score - min_delta:
+            best_score = val_loss
             best_epoch = epoch
             stale_epochs = 0
             torch.save(
@@ -261,7 +273,7 @@ def train_holter(
                     "format_version": MODEL_FORMAT_VERSION,
                     "state_dict": {k: v.detach().cpu() for k, v in model.state_dict().items()},
                     "best_epoch": best_epoch,
-                    "best_validation_average_precision": best_score,
+                    "best_validation_loss": best_score,
                 },
                 run_dir / "best_model.pt",
             )
@@ -270,13 +282,14 @@ def train_holter(
         if stale_epochs >= patience:
             break
     if best_epoch is None:
-        raise RuntimeError("No finite validation AP was produced; no best checkpoint was saved")
+        raise RuntimeError("No finite validation loss was produced; no best checkpoint was saved")
 
     checkpoint = torch.load(run_dir / "best_model.pt", map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["state_dict"])
     val_y, val_probability, val_ids = _predict(model, validation_loader, device)
     val_metrics = binary_metrics(val_y, val_probability, threshold)
     val_metrics["selection_metric"] = best_score
+    val_metrics["selection_metric_name"] = "validation_loss"
     val_metrics["selection_threshold"] = threshold
     val_metrics["threshold_source"] = "DL/training.yaml classification_threshold"
     pd.DataFrame(
@@ -325,7 +338,7 @@ def train_holter(
         "class_mapping": {"negative": 0, "positive": 1},
         "classification_threshold": threshold,
         "best_epoch": best_epoch,
-        "selection_metric": "validation_average_precision",
+        "selection_metric": "validation_loss",
         "positive_class_weight": positive_weight,
         "data_audit_counts": audit["counts"],
         "actual_train_patients_used": len(train_frame),

@@ -185,7 +185,7 @@ Python API와 CLI는 오프라인 호환성을 위해 MLflow 기록이 기본 �
 
 CUDA를 강제하려면 `--device cuda`를 사용합니다. CUDA가 없으면 오류가 발생합니다. 다른 모델 선택 파일은 `--choice <path>`로 지정합니다.
 
-Train만 가중치와 클래스 불균형 보정값 학습에 사용합니다. Validation AP로 best checkpoint와 early stopping을 결정합니다. Train/validation이 비거나 한 클래스이면 학습을 거부합니다. 학습 중 test 예측은 수행하지 않습니다. 파일 shape·품질 인덱스 감사는 모든 split에 적용합니다.
+Train만 가중치와 클래스 불균형 보정값 학습에 사용합니다. Validation BCE loss 최소값으로 best checkpoint와 early stopping을 결정하고, AP는 epoch별 평가 지표로 기록합니다. Train/validation이 비거나 한 클래스이면 학습을 거부합니다. 학습 중 test 예측은 수행하지 않습니다. 파일 shape·품질 인덱스 감사는 모든 split에 적용합니다.
 
 노트북은 `DL/model_experiment_only_DL.ipynb`에서 설정 → 파일 감사 → 로더·모델 생성 → raw 학습 → 복원 → 선택적 최종 평가 순서로 실행합니다.
 
