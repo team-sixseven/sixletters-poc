@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import yaml
 from sklearn.metrics import average_precision_score
+from tqdm.auto import tqdm
 from xgboost import callback
 
 from ..config import (
@@ -223,7 +224,7 @@ def train_clinical(
         if output_directory is not None
         else resolve_config_path(choice["model_output_dir"], choice_path)
     )
-    for model_name, parameter_path, parameters in pending:
+    for model_name, parameter_path, parameters in tqdm(pending, desc="ML models", unit="model"):
         for key in ("model", "classification"):
             if key not in parameters or not isinstance(parameters[key], dict):
                 raise ValueError(f"{parameter_path}: selected model requires a {key} mapping")

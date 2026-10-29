@@ -1,6 +1,18 @@
 # ECG DL 학습·평가 실행 순서
 
-주 실행 경로는 `DL/data/final_split_v2_augmented.csv`와 `DL/data/wave/{pid}.npy`를 사용하는 raw pipeline입니다. 전체 split PID의 파일이 준비되면 재분할 없이 그대로 실행합니다. 아래 명령은 저장소 루트 기준입니다.
+기본 raw pipeline은 `basic.yaml:data.raw_ecg`의 Google Drive 경로를 사용합니다. Drive의 4년 SCD 라벨과 `final_split_augmented.csv`를 사용하며 재분할하지 않습니다. 이 PC의 WSL 마운트 경로는 `/mnt/g`이고, PC별 Drive 경로가 다르면 설정을 조정해야 합니다. 아래 명령은 저장소 루트 기준입니다.
+
+`basic.yaml`의 `drive_root`는 Drive `DATA` 폴더이며, `drive://`로 시작하는 데이터 경로는 이 폴더 기준입니다. 로딩 시 절대경로로 변환되고 학습 설정 snapshot에는 변환된 실제 경로가 기록됩니다. 200Hz와 X/Y/Z의 출처는 Drive `ECG_tem/README.md`이며, YAML의 `source_metadata_confirmed`는 이 출처를 확인했다는 학습 실행 조건입니다.
+
+WSL의 `/mnt/g`가 없으면 Windows에서 연결된 G:가 이 배포판에서 접근 가능한지 확인한 뒤 마운트합니다. 마운트는 현재 WSL 세션에 적용되며 재시작 후 다시 필요할 수 있습니다.
+
+```bash
+wsl.exe -d Ubuntu-24.04 -u root --exec mkdir -p /mnt/g
+wsl.exe -d Ubuntu-24.04 -u root --exec mount -t drvfs G: /mnt/g
+findmnt /mnt/g
+```
+
+Drive 경로의 실행 파일은 `/mnt/c/Windows/System32/wsl.exe`일 수 있습니다. 마운트와 Drive 로그인·공유 권한은 각각 필요합니다. 학습 중 필요한 데이터가 Drive 캐시에 전송될 수 있습니다.
 
 ## 1. Python 환경
 
@@ -53,41 +65,27 @@ Global/.venv/bin/python -m Members.sang.model.DL.dataloader.segmented_ecg
 
 CSV schema는 `pid,split,SCD`이고, PID는 문자열, SCD는 0/1입니다. `val`은 내부에서 `validation`으로 처리합니다. 중복 PID는 같은 split/라벨이어도 거부하며, 환자를 다른 split으로 옮기지 않습니다.
 
-| Split | 환자 | SCD=1 | SCD=0 |
-|---|---:|---:|---:|
-| train | 407 | 123 | 284 |
-| validation | 81 | 10 | 71 |
-| test | 102 | 13 | 89 |
+Drive가 제공한 현재 split은 원본 445명과 train에만 포함된 증강 기록 64개로 총 509개 기록입니다. 기록 수 기준 train 349개(양성 96), validation 71개(양성 8), test 89개(양성 10)입니다. 증강 기록과 원본은 환자 단위 split과 라벨이 같아야 하며 로더가 이를 확인합니다. 데이터 또는 Drive 파일이 바뀌면 실제 감사 결과를 다시 확인해야 합니다.
 
-현재 관측 파일은 memory-mapped `(sample, 3)` float16 배열입니다. 현재 split과 일치하는 파일은 train 9, validation 1, test 1개이며, `P0016-2.npy`는 split에 없습니다. 로더는 파일이 추가돼도 동일하게 작동하고, 없는/잘못된 파일은 PID와 사유로 보고합니다. 전체 품질 CSV에 아직 없는 waveform의 행이 있어도 해당 환자는 누락으로 처리합니다.
-
-실제 NPY에는 sample rate·채널 이름·quality mask가 저장되어 있지 않습니다. 관련 MUSIC 문서의 200 Hz를 설정값으로 두었지만, 이 raw NPY의 생성 과정과 일치하는지는 확인이 필요합니다. 현재 파일의 길이는 10,800,000–17,271,800 samples이며, 시간 단위 해석은 sample rate 확인 후에만 가능합니다. 라벨의 사건 기간과 censoring 정의도 CSV에 없습니다.
+Drive의 `README.md`는 이 NPY가 200Hz, `(샘플, X/Y/Z)` float16이며 SCD 라벨은 Holter 이후 4년 기준이라고 설명합니다. `ECG_tem_clean.csv`의 `has_z`가 False이면 저장된 Z의 0열은 실측 유도가 아니므로 유도 mask에서 제외합니다. 다른 source에 이 설정을 사용할 때는 해당 source의 provenance를 다시 확인하세요.
 
 ## 3. Raw metadata와 품질 인덱스 설정
 
 `Members/sang/model/basic.yaml`의 `data.raw_ecg`에서 경로·sample rate·30초 segment 길이·정규화를 관리합니다.
 
-- `source_metadata_confirmed`: upstream provenance에서 sample rate와 sample/lead 축 의미를 확인한 뒤에만 `true`로 설정합니다. 현재는 `false`입니다.
-- `quality_index_path`: upstream 전처리에서 생성한 품질 CSV 경로를 설정합니다. 현재는 `null`입니다.
-- `normalization`: 기본 `none`입니다. 기존 전처리를 확인하지 않은 채 z-score를 중복 적용하지 않습니다.
+- `source_metadata_confirmed: true`와 200Hz는 연결된 Drive의 `ECG_tem/README.md`에 근거합니다.
+- `quality_index_format: drive_segment_rpeaks`는 Drive의 `segment_rpeaks.csv`를 직접 읽습니다. 파일명으로 각 원본·증강 기록을 식별하고 `window_idx`, `start_idx`가 30초 간격과 일치하는지 확인하며 `exclude=True`인 구간은 사용하지 않습니다. 선택된 파일의 전체 30초 구간에 품질 행이 하나씩 있어야 합니다.
+- `lead_metadata_path`는 Drive의 `ECG_tem_clean.csv`입니다. `has_z=False`이면 Z를 제외하고 X/Y만 사용합니다. 이 파일과 품질·분할 파일의 해시는 저장 후 평가 때 확인합니다.
+- `target_semantics`는 Drive의 4년 SCD 라벨을 명시합니다. 기존 프로젝트의 임상 라벨 및 분할과 다르므로 검증 없이 결과를 결합하지 않습니다.
+- `normalization: none`은 Drive가 제공한 정제 데이터를 다시 정규화하지 않는 설정입니다.
 
-품질 CSV 형식:
-
-```csv
-pid,window_index,usable
-P0001,0,1
-P0001,1,0
-```
-
-`window_index`는 파일 시작 기준 0-based **30초 segment 위치**이고, `usable`은 명시적 0/1입니다. 파일이 있는 환자의 완전한 segment마다 한 행이 필요합니다. 중복·누락·범위 초과·알 수 없는 PID는 오류입니다. 마지막 30초 미만 꼬리는 제외하고 sample 수를 audit에 기록합니다.
-
-0이나 일정한 값만 보고 잡음으로 판단하지 않습니다. 별도 `datas/Holter/windows` source의 `sqi_pass`를 raw quality index로 재사용하지 않습니다. Raw metadata 또는 품질 CSV가 없으면 학습이 중단됩니다.
+기존 별도 원본에 `pid,window_index,usable` 형식을 쓸 때는 `quality_index_format: standard`를 지정하고 해당 CSV를 설정합니다. `lead_metadata_path`를 생략하면 저장된 모든 열을 측정 유도로 취급하므로 source에서 이를 확인해야 합니다. 품질 정보와 확인된 source metadata가 없으면 학습이 중단됩니다.
 
 ### 가변 유도와 가변 시간 길이
 
 각 환자는 실제 `(segments, measured_leads, samples)` 크기를 유지합니다. 배치를 만들 때만 유도 축과 시간 축을 각각 배치 최대치까지 0으로 패딩하고, `lead_mask (batch, leads)`와 `window_mask (batch, segments)`를 분리합니다. 각 실제 유도에 하나의 공유 1유도 CNN을 적용하고, 유도 특징을 평균 통합해 구간 벡터를 만듭니다. 패딩 유도와 제외 시간 구간은 CNN·BatchNorm에 입력하지 않습니다. 없는 유도의 값·패딩 길이·유도 순서를 바꿔도 유효 출력은 같아야 합니다.
 
-이 방식을 선택한 이유는 raw NPY에 유도 이름/대응 정보가 없기 때문입니다. 고정 슬롯 패딩 방식은 2열이 3열의 어떤 유도와 대응하는지 가정해야 해서 채택하지 않았습니다. 평균 통합은 모든 측정 유도를 사용하고 유도 순서에 의존하지 않는 대신, 이름에 따른 유도별 차이나 유도 사이 방향 관계를 구별하지 못합니다. 별도 SQI index의 X/Y/Z 이름을 raw 열의 이름으로 가져오지 않습니다.
+이 방식은 유도 이름의 환자 간 대응을 모델에 하드코딩하지 않습니다. 고정 슬롯 패딩 방식은 2열이 3열의 어떤 유도와 대응하는지 가정해야 해서 채택하지 않았습니다. 평균 통합은 모든 측정 유도를 사용하고 유도 순서에 의존하지 않는 대신, 이름에 따른 유도별 차이나 유도 사이 방향 관계를 구별하지 못합니다. Drive source의 `has_z`는 없는 유도를 mask하는 데만 사용합니다.
 
 기록 길이는 유도 수와 별도로 유효 구간 수·시간 mask로 처리합니다. 제외 구간을 압축해 전달하되 원래 segment index와 gap embedding을 유지합니다. LSTM은 packed lengths, Transformer는 key-padding mask, MIL은 masked attention을 적용합니다. Batch 안의 sample 수가 다르면 임의로 자르거나 resampling하지 않고 오류를 냅니다.
 
@@ -199,7 +197,7 @@ CLI가 출력한 `DL/models/<run_id>/`에 다음 파일이 저장됩니다.
 - `resolved_config.yaml`, `metadata.json`: 복원 설정, 전처리, segment cap, split/quality SHA-256
 - `train_patients.csv`, `excluded_patients.csv`, `data_audit.json`: 실제 사용 PID·split·라벨, 누락/품질 제외/smoke cap 사유
 - `validation_predictions.csv`: PID별 라벨·확률·threshold와 사용한 segment 인덱스
-- `metrics.json`, `training_history.csv`, `run_status.json`: validation 지표, epoch 이력, 완료 상태
+- `metrics.json`, `training_history.csv`, `run_status.json`: validation 지표, epoch 이력(train/validation loss 포함), 완료 상태. `training_history.csv`는 매 epoch 갱신됩니다.
 - MLflow 활성 시 `mlflow_status.json`, `summary.json`: 계정별 전송 상태와 학습 run 링크
 
 `run_status.json`의 `COMPLETE`를 확인합니다. `used_window_indices`에는 실제 선택 인덱스 전체가 JSON list로 기록됩니다. `windows_used`, `first_window_index`, `last_window_index`도 함께 저장됩니다.
@@ -249,7 +247,7 @@ Global/.venv/bin/python -m pytest Members/sang/model/DL/tests/test_pipeline.py -
 
 테스트는 가변 길이, 2·3 lead 혼합 배치와 별도 유도/시간 mask, 패딩 NaN·유도 순서 불변성, 실제 세 번째 유도 gradient, 품질 제외 gap·tail, 누락 파일, 유효 segment 없음, 중복/상충 PID, 9개 모델 조합 forward·padding 불변성·CNN gradient, 짧은 raw 학습·checkpoint 복원·환자 평가, 설정/split 변경 차단, 실제 raw 추론과 모의 ML 확률의 fusion을 확인합니다. Fusion 테스트의 ML 예측은 stub이며 실제 임상 모델의 성능 검증이 아닙니다. 두 모의 계정의 raw/SQI 학습·평가 업로드 경로, 전송 실패·재시도, 업로드 설정으로 network 복원, 두 노트북의 자동 학습/평가 연결도 검증합니다. 이 검증은 실제 서버에 데이터를 전송하지 않습니다.
 
-전체 590 PID에 관측된 sample-major 형식의 작은 합성 NPY가 있는 조건에서 407/81/102 split 로딩도 확인했습니다. 실제 제공 raw 파일은 형식·finite 값과 라벨 없는 forward만 확인할 수 있고, raw metadata와 품질 index가 없으므로 실제 raw 학습이나 임상 성능 검증은 수행하지 않았습니다.
+이전 별도 source의 합성 데이터로 590개 기록의 407/81/102 split 로딩을 확인했습니다. 이후 Drive source로 소규모 실제 학습·평가 및 MLflow 기록을 실행했습니다. 임상 성능은 검증하지 않았습니다.
 
 CNN은 기존 구현을 모델별 `CNN/resnet.py`, `inception_time.py`, `TCN.py`로 분리해 재사용합니다. 시간 특징 구현도 `LSTM/Attention_LSTM_FCN.py`, `BiLSTM.py`, `Transformer/transformer_enc.py`에서 관리하며 공통 조립·MIL은 `composed.py`에 있습니다. Padding을 CNN/BatchNorm에서 제외하도록 조립 경로를 수정했습니다. Packed LSTM, Transformer key-padding mask, masked MIL, measured-lead 표시와 gap 입력을 추가했습니다. Attention LSTM FCN은 CNN 구간 벡터에 packed LSTM과 masked temporal FCN을 병렬 적용하고 구간별 특징을 결합한 뒤 환자 MIL을 적용하는 변형입니다. FCN은 위치별 LayerNorm을 사용하고 각 convolution 뒤 시간 padding을 지워 패딩 통계/값이 유효 구간에 영향을 주지 않게 합니다. 독립 segment 분류를 수행하지 않습니다. Raw loader는 기존 10초 SQI source의 format·mask를 재사용하면 정렬을 보장할 수 없어 별도로 구현했습니다.
 
@@ -275,6 +273,6 @@ Global/.venv/bin/python -m Members.sang.model.DL.training
 
 `DL/tests/test_pipeline.py`와 변경하지 않은 `ML/tests/test_workflow.py`를 함께 실행해 **46개 테스트가 통과**했습니다. 2·3유도 혼합/가변 시간 길이의 실제 collator 배치로 BCE 학습·optimizer step, 9개 CNN×시간 조합의 padding NaN 불변성과 BatchNorm buffer 일치, 유도 순서 변경, 네 번째 absent slot 추가, 실제 세 번째 유도 gradient, 4개 activation과 자동 차원 연결, snapshot 복원, 환자 단위 평가와 MLflow bundle network 복원을 합성 데이터로 확인했습니다.
 
-실제 raw `P0008.npy` `(17271800, 3)` float16에서 읽은 두 개의 6000-sample block으로 9개 조합의 라벨 없는 forward를 확인했습니다. 이는 tensor 형식 검증이며 sample rate/품질이 확인된 30초 구간이라고 주장하지 않습니다. 현재 실제 2유도 파일은 확인되지 않았습니다.
+이전 별도 source 검증 당시 실제 raw `P0008.npy` `(17271800, 3)` float16에서 읽은 두 개의 6000-sample block으로 9개 조합의 라벨 없는 forward를 확인했습니다. 이는 tensor 형식 검증이며 sample rate/품질이 확인된 30초 구간이라고 주장하지 않습니다. 현재 실제 2유도 파일은 확인되지 않았습니다.
 
-기존 저장 Random Forest v4를 새 공통 로더/평가 경로로 validation 81명에 적용해 PID 유일성과 0~1 환자 확률 출력을 확인했습니다. 재학습·test 평가·MLflow 전송·원본 파일 수정은 수행하지 않았습니다. 실제 raw 학습은 기존 rate/quality provenance 조건이 충족되지 않아 수행하지 않았습니다.
+이전 별도 source 검증 당시 기존 저장 Random Forest v4를 새 공통 로더/평가 경로로 validation 81명에 적용해 PID 유일성과 0~1 환자 확률 출력을 확인했습니다. 재학습·test 평가·MLflow 전송·원본 파일 수정은 수행하지 않았습니다. 실제 raw 학습은 기존 rate/quality provenance 조건이 충족되지 않아 수행하지 않았습니다.

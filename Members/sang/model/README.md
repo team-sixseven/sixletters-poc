@@ -45,7 +45,7 @@ model/
 
 ## Current DL configuration and lead handling
 
-The raw DL path uses `DL/data/final_split_v2_augmented.csv` and sample-major NPY files. A single shared one-lead CNN processes every measured lead, then averages measured-lead features per segment before LSTM/Transformer → masked attention MIL → MLP. Lead identity is unavailable in raw files; no cross-patient column correspondence is invented. Batch lead padding and time padding use independent masks and never enter CNN/BatchNorm. Record-length limits are separate from lead count.
+The default raw DL path uses the connected Drive `final_split_augmented.csv`, its 4-year SCD labels, sample-major NPY files, segment quality index, and measured-lead metadata. A single shared one-lead CNN processes every measured lead, then averages measured-lead features per segment before LSTM/Transformer → masked attention MIL → MLP. The Drive source documents X/Y/Z and identifies missing Z; the encoder pools measured leads without assuming lead identity is interchangeable across patients. Batch lead padding and time padding use independent masks and never enter CNN/BatchNorm. Record-length limits are separate from lead count.
 
 Model selection YAML has two keys only. Each model YAML contains flat experiment hyperparameters; no implementation path, input/output shape, feature method or fixed channel count. All models expose structural feature dimensions and dimensions are connected automatically. See [`DL/TRAINING.md`](DL/TRAINING.md) for exact examples and checkpoint format v2 migration. Old fixed-lead DL checkpoints require their original code or retraining; ML model formats are unchanged.
 
@@ -55,8 +55,8 @@ The legacy SQI source described below is separate from raw 30-second waveforms. 
 
 `basic.yaml` declares data paths and essential schema; `config.py:load_basic_config()` fills shared defaults for split/sidecar columns, filenames, ECG policies, and audit output paths. Relative paths resolve from `basic.yaml` itself, regardless of the current working directory. Current paths are:
 
-- Clinical: `ML/data/clinical_clean.csv`
-- Split: `ML/data/final_split.csv` (`val` maps to the internal `validation` split)
+- Clinical: connected Drive `DATA/clincal/clinical_clean.csv`
+- Split: connected Drive `DATA/final_split.csv` (`val` maps to the internal `validation` split)
 - ECG: `../datas/Holter/windows/{pid}.npy`
 - ECG window metadata: `../datas/Holter/index/windows.csv.gz` (used to align array rows, timestamps, and `sqi_pass`)
 
@@ -76,7 +76,7 @@ The SCD column is used as the supplied binary label without reassigning outcomes
 
 ECG + clinical Fusion의 환경 준비, 저장 모델 선택, validation 가중치 설정·학습, 최종 test와 MLflow 기록은 [fusion_manu.md](fusion_manu.md)를 순서대로 따라 실행합니다.
 
-DL 학습 smoke, 전체 학습, checkpoint 확인, test 평가의 단계별 명령은 [`DL/TRAINING.md`](DL/TRAINING.md)에 정리했습니다. `DL.raw_pipeline`은 raw `DL/data/wave` 및 `final_split_v2_augmented.csv`를 사용합니다. 현재 raw source의 sample-rate/channel-order provenance와 quality index가 확인되지 않아 실제 raw 학습은 차단됩니다. 전체 파일과 metadata가 준비되면 노트북과 CLI에서 같은 raw 경로를 실행합니다. 기존 SQI-window trainer도 별도 경로로 유지합니다.
+DL 학습 smoke, 전체 학습, checkpoint 확인, test 평가의 단계별 명령은 [`DL/TRAINING.md`](DL/TRAINING.md)에 정리했습니다. 기본 raw source는 연결된 Drive의 200Hz X/Y/Z 파형·구간 품질 표·유도 정보를 사용합니다. Drive 분할과 기존 임상 분할이 달라 결과를 결합하기 전에 대상·라벨·환자 분할의 일치를 확인해야 합니다. 기존 SQI-window trainer도 별도 경로로 유지합니다.
 
 From the repository root, using the `Global` project environment:
 

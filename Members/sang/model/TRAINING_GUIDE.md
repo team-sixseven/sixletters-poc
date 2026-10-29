@@ -3,8 +3,8 @@
 이 문서는 현재 `model/` 코드를 실제로 실행하는 가장 짧은 경로입니다. 모든 명령은 저장소 루트에서 실행합니다.
 
 ```text
-환경·MLflow 연결 → ML 또는 DL 학습 → validation 평가·선택
-→ 설정 고정 → test 평가 → MLflow 확인
+환경 준비 → (MLflow 사용 시 계정 연결) → ML 또는 DL 학습
+→ validation 평가·선택 → 설정 고정 → test 평가 → 결과 확인·기록
 ```
 
 세부 하이퍼파라미터와 화면별 설명은 [ML_manu.md](ML/ML_manu.md), [DL_manu.md](DL/DL_manu.md), [fusion_manu.md](fusion_manu.md)에 있습니다.
@@ -40,36 +40,51 @@ Global/.venv/bin/python -m jupyterlab
 
 ### MLflow 계정 연결
 
-`username`은 서버 인증 계정, `owner`는 결과 작성자 태그와 개인 결과 폴더, `experiment`는 결과를 모을 공간입니다. 계정과 experiment 이름은 별개입니다.
+`username`은 서버 인증 계정, `owner`는 결과 작성자 태그와 개인 결과 폴더, `experiment`는 MLflow에서 run을 모을 공간입니다. 계정과 experiment 이름은 별개입니다. 팀원이 각자 experiment를 쓰려면 **각자 자기 MLflow 계정으로 로그인해 experiment를 한 번 생성**한 다음, 로컬 설정에서 그 이름을 선택합니다. 예를 들어 `euna`는 `euna-scd-ml`, `minjeong`은 `minjeong-scd-ml`을 사용합니다.
 
-팀 공용 experiment에 기록하는 예시입니다.
+1. MLflow 웹 화면에 본인 계정으로 로그인해 **Experiments → Create Experiment**에서 고유한 experiment를 만듭니다. 이름은 `<owner>-scd-ml`처럼 팀에서 겹치지 않게 정합니다.
+2. 저장소 루트에서 자기 `owner`, 인증 `username`, 서버 주소, 방금 만든 experiment 이름으로 설정합니다.
+3. 연결 확인 출력에 본인 `username`·`owner`·`experiment`가 표시되는지 확인한 뒤 학습 노트북을 실행합니다.
+
+예를 들어 은아는 다음처럼 설정합니다. 다른 팀원은 세 값을 모두 본인 것으로 바꾸고, `--experiment`에는 본인이 만든 이름을 넣습니다.
 
 ```bash
 Global/.venv/bin/python -m sixletters setup \
   --owner euna \
   --username euna \
   --uri http://192.168.10.88:5000 \
-  --experiment sang-scd-ml \
+  --experiment euna-scd-ml \
   --password
 Global/.venv/bin/python -m Members.sang.model.tracking.check_connection
 ```
 
-개인 공간을 쓰려면 `--experiment euna-scd-ml`처럼 본인 이름으로 바꿉니다. 서버에 그 experiment가 존재하고 본인 계정에 조회·기록 권한이 있어야 합니다. 자세한 네트워크·권한 설명은 [TEAM_MLFLOW.md](tracking/TEAM_MLFLOW.md)를 봅니다.
+현재 연결 검사는 선택한 experiment가 이미 있고 본인 계정으로 조회 가능한지 확인합니다. 따라서 처음에는 MLflow UI에서 직접 생성해야 합니다. **Create Experiment 메뉴가 없거나 생성이 거부되면 서버 관리자에게 experiment 생성 권한을 요청하거나 이름을 전달해 사전 생성을 부탁하세요.** 같은 PC를 다른 사람이 이어서 쓸 때는 setup을 다시 실행합니다. 설정 우선순위와 네트워크·계정 관리는 [TEAM_MLFLOW.md](tracking/TEAM_MLFLOW.md)를 참고합니다.
 
 `MLFLOW_TRACKING_*` 환경 변수가 있으면 로컬 `.poc.local.toml`보다 우선합니다. 연결 확인 출력에서 username·owner·experiment가 의도한 값인지 먼저 확인합니다.
 
 ### 데이터 확인
 
-ML은 `ML/data/clinical_clean.csv`, `ML/data/final_split.csv`를 사용합니다. 경로는 [basic.yaml](basic.yaml)에서 변경합니다.
+데이터는 저장소 안의 `ML/data`나 `DL/data`가 아니라, 연결된 Google Drive의 `DATA` 폴더에서 읽습니다. [basic.yaml](basic.yaml)의 `drive_root`가 이 폴더를 가리키고, `drive://` 경로는 그 아래에서 해석됩니다. 현재 설정된 항목은 다음과 같습니다.
 
-Raw DL은 다음이 모두 있어야 합니다.
+| 용도 | Drive 경로 (`DATA/` 기준) | 설정 키 |
+| --- | --- | --- |
+| Clinical ML 입력 | `clincal/clinical_clean.csv` | `data.clinical.path` |
+| Clinical ML 환자 분할 | `final_split.csv` | `data.split.path` |
+| Raw DL 환자 분할·4년 SCD 라벨 | `ECG_tem/final_split_augmented.csv` | `data.raw_ecg.split_path` |
+| Raw DL 파형 | `ECG_tem/ECG_tem_clean/clean_signal/{pid}.npy` | `data.raw_ecg.wave_directory` |
+| 30초 구간 품질 정보 | `ECG_tem/segment_rpeaks.csv` | `data.raw_ecg.quality_index_path` |
+| 실제 측정 유도 정보 | `ECG_tem/ECG_tem_clean.csv` | `data.raw_ecg.lead_metadata_path` |
 
-- `DL/data/final_split_v2_augmented.csv`
-- `DL/data/wave/{pid}.npy`
-- 확인된 sample rate·sample/lead 축 근거
-- `pid,window_index,usable` 열의 실제 30초 품질 인덱스
+실행 PC에서 Drive가 다른 위치에 마운트되면 `basic.yaml`의 `drive_root`만 해당 PC의 `DATA` 폴더로 지정합니다. `source_metadata_confirmed: true`, 200 Hz, 30초 구간 및 Drive 품질·유도 metadata 설정은 현재 연결된 Drive의 README와 파일 구조를 기준으로 구성되어 있습니다. raw DL은 품질 인덱스의 제외 구간과 `has_z` 유도 정보를 확인하므로, 예전 `DL/data/...` 경로나 `pid,window_index,usable` 형식의 sidecar를 준비할 필요가 없습니다.
 
-현재 기본 설정은 `source_metadata_confirmed: false`, `quality_index_path: null`입니다. 따라서 raw DL 학습은 의도적으로 중단됩니다. 원본 정보와 품질 인덱스를 확인 없이 만들어 넣거나 모든 구간을 usable로 처리하지 않습니다.
+Raw DL의 분할과 파형 파일 존재 여부는 다음 명령으로 먼저 확인할 수 있습니다.
+
+```bash
+uvx --from uv==0.9.26 uv run --project Global --locked \
+  python -m Members.sang.model.DL.dataloader.segmented_ecg
+```
+
+이 명령은 품질 인덱스와 유도 metadata까지 검증하지는 않습니다. 그 검증은 DL 노트북의 cohort 로딩 단계에서 수행됩니다. Clinical ML과 Raw DL은 서로 다른 Drive 분할 파일을 사용하므로 두 결과를 결합할 때는 환자 ID·분할·라벨이 일치하는지 별도로 확인합니다.
 
 ## 2. Clinical ML 학습
 
@@ -225,29 +240,31 @@ CLI로 final test를 할 때는 먼저 `fusion.mode: saved`, `fusion.saved_run_d
 
 Fusion은 양쪽 예측이 있는 환자만 사용합니다. 동일 환자의 split·SCD 라벨·target semantics가 다르면 중단하며, 한쪽이 없는 환자는 `excluded_patients.csv`로 기록합니다.
 
-## 6. MLflow 완료 확인·재전송
+## 6. MLflow 기록·오프라인 실행·재전송
 
-로컬 학습 성공은 `run_status.json`의 `COMPLETE`, 원격 업로드 성공은 `mlflow_status.json`의 `FINISHED`와 URL로 확인합니다. `PENDING`이면 모델·평가 결과는 로컬에 남았고 전송만 재시도하면 됩니다.
+연결되면 학습·평가 후 `mlflow_status.json`의 `FINISHED`와 URL을 확인합니다. `PENDING`이면 로컬 결과는 저장됐지만 전송이 완료되지 않은 상태입니다.
 
-평가 결과 재전송 예시입니다. ML/DL/Fusion 경로로 바꿔 사용합니다.
+서버에 연결할 수 없으면 **ML/DL 노트북에서 `mlflow_logging=False`**로 바꾼 뒤 실행합니다. `True`일 때 학습 전 연결 검사가 실패하면 학습을 시작하지 않습니다. DL CLI는 `--mlflow-logging`을 생략하고, 평가 CLI는 `evaluation/eval.yaml`에서 `evaluation.mlflow_logging: false`로 설정합니다. ML·DL 노트북은 실행 설정의 `mlflow_logging` 값으로 학습과 연결된 평가 기록을 함께 제어합니다.
+
+결과는 ML `ML/models/<run_id>/`, DL `DL/models/<run_id>/`, 평가 `evaluation/results/<target>/<run_id>/`에 남습니다. 학습은 `run_status.json`의 `COMPLETE`, 평가는 `metrics.json`과 예측 CSV가 있는지 확인하고 run 폴더를 보존합니다. `mlflow_logging=False`로 실행한 결과는 `mlflow_status.json`이 없을 수 있습니다.
+
+서버 연결이 복구되면 개인 계정·experiment를 설정하고 연결 검사를 통과한 뒤, 재학습·재평가 없이 해당 run 폴더를 전송합니다.
 
 ```bash
 Global/.venv/bin/python - <<'PY'
 from pathlib import Path
+from Members.sang.model.tracking.log_best import log_ml_training_to_mlflow
+from Members.sang.model.tracking.log_dl import log_dl_training_to_mlflow
 from Members.sang.model.tracking.log_evaluation import log_evaluation_to_mlflow
 
-run = Path("Members/sang/model/evaluation/results/ml/실제_평가_run")
-print(log_evaluation_to_mlflow(run))
+# 실행할 결과 종류만 남기고 경로를 실제 run 폴더로 바꿉니다.
+print(log_ml_training_to_mlflow(Path("Members/sang/model/ML/models/<run_id>")))
+# print(log_dl_training_to_mlflow(Path("Members/sang/model/DL/models/<run_id>")))
+# print(log_evaluation_to_mlflow(Path("Members/sang/model/evaluation/results/ml/<run_id>")))
 PY
 ```
 
-학습 결과 재전송은 ML에 `log_ml_training_to_mlflow`, DL에 `log_dl_training_to_mlflow`를 사용합니다. 정확한 명령은 각 세부 매뉴얼에 있습니다. 재시도 전에는 항상 연결을 다시 확인합니다.
-
-```bash
-Global/.venv/bin/python -m Members.sang.model.tracking.check_connection
-```
-
-## 7. 완료 기준과 현재 제한
+## 7. 완료 기준과 현재 상태
 
 | 단계 | 확인 파일 |
 | --- | --- |
@@ -256,4 +273,4 @@ Global/.venv/bin/python -m Members.sang.model.tracking.check_connection
 | 평가 | `evaluation/results/<target>/<run_id>/metrics.json`, 예측 CSV |
 | Fusion | `fusion_weights.json`, `excluded_patients.csv`, `resolved_config.yaml` |
 
-최근 ML·DL 회귀 검증은 92개 테스트를 통과했습니다. 실제 ML 학습·평가·MLflow 기록도 확인했습니다. 현재 raw DL 전체 실행과 fusion은 waveform 부족, 원본 metadata 미확인, 품질 인덱스 부재 때문에 진행할 수 없습니다. 데이터가 준비되면 3절부터 실행하면 됩니다.
+현재 `basic.yaml`에 설정된 Clinical ML 입력·분할, Raw DL 분할·파형 폴더·품질 인덱스·유도 metadata 경로는 연결된 Drive에서 확인됩니다. Raw DL은 학습 전 1절의 감사 명령과 노트북 cohort 로딩을 통과해야 합니다. 경로가 존재한다는 사실만으로 전체 환자의 파형·품질 정보가 학습 조건을 만족한다고 단정하지 않으며, 감사 결과를 확인하기 전에는 전체 학습이나 fusion 검증 완료로 간주하지 않습니다.

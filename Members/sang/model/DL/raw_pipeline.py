@@ -18,6 +18,7 @@ import yaml
 from sklearn.metrics import average_precision_score
 from torch import nn
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 from ..config import (
     load_experiment_config,
@@ -76,6 +77,17 @@ def load_raw_evaluation_cohort(artifact_dir: Path, basic: dict, basic_path: Path
     ):
         if current.get(key) != saved.get(key):
             raise ValueError(f"Raw DL evaluation {key} differs from the training configuration")
+    if current.get("quality_index_format", "standard") != saved.get(
+        "quality_index_format", "standard"
+    ):
+        raise ValueError("Raw DL evaluation quality index format differs from training")
+    lead_value = current.get("lead_metadata_path")
+    if bool(lead_value) != bool(saved.get("lead_metadata_path")):
+        raise ValueError("Raw DL evaluation lead metadata configuration differs from training")
+    if lead_value and _sha256(resolve_data_path(lead_value, basic_path)) != metadata.get(
+        "lead_metadata_sha256"
+    ):
+        raise ValueError("Raw DL lead metadata changed since training")
     for path_key, hash_key in (
         ("split_path", "split_sha256"),
         ("quality_index_path", "quality_index_sha256"),
@@ -93,16 +105,26 @@ def load_raw_evaluation_cohort(artifact_dir: Path, basic: dict, basic_path: Path
 
 
 @torch.inference_mode()
-def _predict(model, loader, device):
+def _predict(model, loader, device, criterion=None):
     model.eval()
     ids, labels, probabilities, usage = [], [], [], []
-    for patient_ids, waveforms, targets, mask, positions, lead_presence in loader:
+    loss_sum, loss_count = 0.0, 0
+    for patient_ids, waveforms, targets, mask, positions, lead_presence in tqdm(
+        loader, desc="DL inference", unit="batch", leave=False
+    ):
         logits = model(
             waveforms.to(device),
             mask.to(device),
             positions.to(device),
             lead_presence.to(device),
         )
+        if criterion is not None:
+            batch_targets = targets.to(device)
+            batch_loss = criterion(logits[:, 0], batch_targets)
+            if not torch.isfinite(batch_loss):
+                raise RuntimeError("Non-finite validation loss")
+            loss_sum += float(batch_loss.cpu()) * len(patient_ids)
+            loss_count += len(patient_ids)
         scores = torch.sigmoid(logits[:, 0])
         if not torch.isfinite(scores).all():
             raise ValueError("Raw DL model returned NaN/Inf probabilities")
@@ -120,7 +142,8 @@ def _predict(model, loader, device):
             }
             for i in range(len(patient_ids))
         )
-    return np.asarray(labels, dtype=np.int64), np.asarray(probabilities), ids, usage
+    mean_loss = loss_sum / loss_count if loss_count else None
+    return np.asarray(labels, dtype=np.int64), np.asarray(probabilities), ids, usage, mean_loss
 
 
 def train_raw_ecg(
@@ -248,10 +271,12 @@ def train_raw_ecg(
     best_score, best_epoch, stale = float("-inf"), None, 0
     patience = int(training["early_stopping"]["patience"])
     min_delta = float(training["early_stopping"]["min_delta"])
-    for epoch in range(1, epochs + 1):
+    for epoch in tqdm(range(1, epochs + 1), desc="DL epochs", unit="epoch"):
         model.train()
-        losses = []
-        for _, waveforms, targets, mask, positions, lead_presence in train_loader:
+        loss_sum, loss_count = 0.0, 0
+        for _, waveforms, targets, mask, positions, lead_presence in tqdm(
+            train_loader, desc=f"Epoch {epoch}/{epochs}", unit="batch", leave=False
+        ):
             waveforms, targets = waveforms.to(device), targets.to(device)
             mask, positions, lead_presence = (
                 mask.to(device),
@@ -266,16 +291,21 @@ def train_raw_ecg(
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
-            losses.append(float(loss.detach().cpu()))
-        val_y, val_probability, val_ids, val_usage = _predict(model, validation_loader, device)
+            loss_sum += float(loss.detach().cpu()) * len(targets)
+            loss_count += len(targets)
+        val_y, val_probability, val_ids, val_usage, val_loss = _predict(
+            model, validation_loader, device, criterion
+        )
         val_ap = float(average_precision_score(val_y, val_probability))
         record = {
             "epoch": epoch,
-            "training_loss": float(np.mean(losses)),
+            "training_loss": loss_sum / loss_count,
+            "validation_loss": val_loss,
             "validation_average_precision": val_ap,
             "validation_patients": len(val_ids),
         }
         history.append(record)
+        pd.DataFrame(history).to_csv(run_dir / "training_history.csv", index=False)
         print(json.dumps(record))
         if val_ap > best_score + min_delta:
             best_score, best_epoch, stale = val_ap, epoch, 0
@@ -299,7 +329,7 @@ def train_raw_ecg(
 
     checkpoint = torch.load(run_dir / "best_model.pt", map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["state_dict"])
-    val_y, val_probability, val_ids, val_usage = _predict(model, validation_loader, device)
+    val_y, val_probability, val_ids, val_usage, _ = _predict(model, validation_loader, device)
     val_metrics = binary_metrics(val_y, val_probability, threshold)
     val_metrics["selection_metric"] = best_score
     val_metrics["threshold_source"] = "DL/training.yaml classification_threshold"
@@ -343,7 +373,8 @@ def train_raw_ecg(
         "lead_strategy": LEAD_STRATEGY,
         "mil_pooling": training.get("mil", {}).get("pooling", "attention"),
         "target_column": "SCD",
-        "target_semantics": basic["data"]["clinical"].get(
+        "target_semantics": raw_config.get("target_semantics")
+        or basic["data"]["clinical"].get(
             "target_semantics",
             "Provided binary SCD label; prediction horizon is unspecified",
         ),
@@ -357,6 +388,11 @@ def train_raw_ecg(
         "quality_index_path": str(resolve_data_path(raw_config["quality_index_path"], basic_path)),
         "quality_index_sha256": _sha256(
             resolve_data_path(raw_config["quality_index_path"], basic_path)
+        ),
+        "lead_metadata_sha256": (
+            _sha256(resolve_data_path(raw_config["lead_metadata_path"], basic_path))
+            if raw_config.get("lead_metadata_path")
+            else None
         ),
         "quality_window_counts": audit["quality_window_counts"],
         "normalization": normalization,
@@ -409,6 +445,10 @@ def predict_raw_dl_run(
         raise ValueError(
             "Raw DL quality index changed since training; refusing inconsistent evaluation"
         )
+    if config.get("lead_metadata_path"):
+        lead_path = resolve_data_path(config["lead_metadata_path"], Path(resolved["basic_path"]))
+        if _sha256(lead_path) != metadata.get("lead_metadata_sha256"):
+            raise ValueError("Raw DL lead metadata changed since training")
     raw_training = resolved["training"]
     dataset = RawPatientSequenceDataset(
         patients,
@@ -418,7 +458,7 @@ def predict_raw_dl_run(
         resolved["raw_normalization"],
     )
     loader = _make_loader(dataset, int(raw_training["batch_size"]), False, 0)
-    labels, probabilities, ids, usage = _predict(model, loader, device)
+    labels, probabilities, ids, usage, _ = _predict(model, loader, device)
     if ids != patients.patient_id.astype(str).tolist():
         raise ValueError("Raw DL prediction IDs do not match the requested PID order")
     return probabilities, metadata, usage

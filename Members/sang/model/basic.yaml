@@ -1,22 +1,25 @@
+drive_root: /mnt/g/.shortcut-targets-by-id/11rNObXs4cxNsiNEl_9jtgRXZz45CA_bW/식스세븐 PoC 프로젝트/DATA
 data:
   clinical:
-    path: ML/data/clinical_clean.csv
+    path: drive://clincal/clinical_clean.csv
     id_column: Patient ID
     label_column: SCD
   split:
-    path: ML/data/final_split.csv
+    path: drive://final_split.csv
   ecg:
     directory: ../datas/Holter/windows
     metadata_path: ../datas/Holter/index/windows.csv.gz
     sample_rate_hz: 200
   raw_ecg:
-    split_path: DL/data/final_split_v2_augmented.csv
-    wave_directory: DL/data/wave
+    split_path: drive://ECG_tem/final_split_augmented.csv
+    wave_directory: drive://ECG_tem/ECG_tem_clean/clean_signal
     sample_rate_hz: 200
-    sample_rate_source: MUSIC_recording_headers_documented_in_members_sang_docs
-    source_metadata_confirmed: false
+    source_metadata_confirmed: true
     segment_seconds: 30
     normalization: none
-    quality_index_path: null
+    quality_index_path: drive://ECG_tem/segment_rpeaks.csv
+    quality_index_format: drive_segment_rpeaks
+    lead_metadata_path: drive://ECG_tem/ECG_tem_clean.csv
+    target_semantics: SCD within four years after Holter recording, as described in Drive ECG_tem README
 outputs:
   dl_model_directory: DL/models

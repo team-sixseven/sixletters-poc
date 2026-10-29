@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import re
 from pathlib import Path
 
 import numpy as np
@@ -27,6 +28,30 @@ def load_raw_cohort(basic: dict, basic_path: Path, *, require_quality: bool = Tr
     if sample_rate <= 0 or window_seconds <= 0:
         raise ValueError("raw_ecg sample_rate_hz and segment_seconds must be positive")
     rows = read_patient_split(split_path)
+    quality_format = config.get("quality_index_format", "standard")
+    if quality_format not in {"standard", "drive_segment_rpeaks"}:
+        raise ValueError(f"Unsupported raw quality index format: {quality_format}")
+    if quality_format == "drive_segment_rpeaks":
+        base_assignments = {}
+        for pid, split, label in rows:
+            base = re.sub(r"-\d+$", "", pid)
+            if base in base_assignments and base_assignments[base] != (split, label):
+                raise ValueError(f"Augmented records disagree on patient split or label: {base}")
+            base_assignments[base] = (split, label)
+    lead_metadata = {}
+    lead_value = config.get("lead_metadata_path")
+    if lead_value:
+        lead_path = resolve_data_path(lead_value, basic_path)
+        with lead_path.open(encoding="utf-8-sig", newline="") as stream:
+            reader = csv.DictReader(stream)
+            if not reader.fieldnames or not {"file", "has_z"}.issubset(reader.fieldnames):
+                raise ValueError(f"{lead_path}: expected file and has_z columns")
+            for line, row in enumerate(reader, start=2):
+                filename = row["file"].strip()
+                value = row["has_z"].strip().lower()
+                if filename in lead_metadata or value not in {"true", "false"}:
+                    raise ValueError(f"{lead_path}:{line}: duplicate filename or invalid has_z")
+                lead_metadata[filename] = value == "true"
     duplicate_split = {}
     assigned = {}
     records = []
@@ -56,6 +81,12 @@ def load_raw_cohort(basic: dict, basic_path: Path, *, require_quality: bool = Tr
                 )
             if array.dtype.kind not in "fiu" or array.shape[0] < window_samples:
                 raise ValueError(f"unsupported dtype or shorter than one {window_seconds}s window")
+            if lead_value:
+                if path.name not in lead_metadata or array.shape[1] != 3:
+                    raise ValueError("missing lead metadata or expected three stored XYZ columns")
+                measured = [True, True, lead_metadata[path.name]]
+            else:
+                measured = [True] * int(array.shape[1])
             count = int(array.shape[0] // window_samples)
             usable = np.ones(count, dtype=bool)
             all_usable[pid] = usable
@@ -68,6 +99,7 @@ def load_raw_cohort(basic: dict, basic_path: Path, *, require_quality: bool = Tr
                     "reason": None,
                     "sample_count": int(array.shape[0]),
                     "lead_count": int(array.shape[1]),
+                    "lead_presence": measured,
                     "window_count": count,
                     "discarded_tail_samples": int(array.shape[0] % window_samples),
                 }
@@ -104,18 +136,44 @@ def load_raw_cohort(basic: dict, basic_path: Path, *, require_quality: bool = Tr
         validated_rows = 0
         with quality_path.open(encoding="utf-8-sig", newline="") as stream:
             reader = csv.DictReader(stream)
-            if not reader.fieldnames or not QUALITY_COLUMNS.issubset(reader.fieldnames):
-                raise ValueError(f"{quality_path}: expected columns {sorted(QUALITY_COLUMNS)}")
+            required = (
+                QUALITY_COLUMNS
+                if quality_format == "standard"
+                else {"pid", "file", "window_idx", "start_idx", "exclude"}
+            )
+            if not reader.fieldnames or not required.issubset(reader.fieldnames):
+                raise ValueError(f"{quality_path}: expected columns {sorted(required)}")
             for line, row in enumerate(reader, start=2):
-                pid = (row.get("pid") or "").strip()
+                if quality_format == "drive_segment_rpeaks":
+                    filename = (row.get("file") or "").strip()
+                    if not filename.endswith(".npy"):
+                        raise ValueError(f"{quality_path}:{line}: invalid waveform filename")
+                    pid = filename[:-4]
+                    if pid not in assigned:
+                        continue
+                    if re.sub(r"-\d+$", "", pid) != (row.get("pid") or "").strip():
+                        raise ValueError(f"{quality_path}:{line}: filename/patient mismatch")
+                    try:
+                        index = int(row["window_idx"])
+                        start = int(row["start_idx"])
+                    except (TypeError, ValueError) as error:
+                        raise ValueError(
+                            f"{quality_path}:{line}: invalid window position"
+                        ) from error
+                    flag = (row.get("exclude") or "").strip().lower()
+                    if flag not in {"true", "false"} or start != index * window_samples:
+                        raise ValueError(f"{quality_path}:{line}: invalid exclusion or alignment")
+                    usable = int(flag == "false")
+                else:
+                    pid = (row.get("pid") or "").strip()
+                    try:
+                        index, usable = int(row["window_index"]), int(row["usable"])
+                    except (TypeError, ValueError) as error:
+                        raise ValueError(
+                            f"{quality_path}:{line}: index and usable must be integers"
+                        ) from error
                 if pid not in assigned:
                     raise ValueError(f"{quality_path}:{line}: pid {pid!r} is absent from the split")
-                try:
-                    index, usable = int(row["window_index"]), int(row["usable"])
-                except (TypeError, ValueError) as error:
-                    raise ValueError(
-                        f"{quality_path}:{line}: index and usable must be integers"
-                    ) from error
                 if usable not in (0, 1) or index < 0:
                     raise ValueError(f"{quality_path}:{line}: invalid window_index or usable value")
                 key = (pid, index)
@@ -226,7 +284,9 @@ class RawPatientSequenceDataset(Dataset):
         chosen = valid[np.linspace(0, len(valid) - 1, take, dtype=np.int64)]
         array = np.load(Path(row.ecg_path), mmap_mode="r", allow_pickle=False)
         lead_count = int(array.shape[1])
-        lead_mask = np.ones(lead_count, dtype=bool)
+        lead_mask = np.asarray(row.get("lead_presence", [True] * lead_count), dtype=bool)
+        if lead_mask.shape != (lead_count,) or not lead_mask.any():
+            raise ValueError(f"{pid}: invalid measured-lead mask")
         windows = []
         for window_index in chosen:
             start = int(window_index) * self.window_samples

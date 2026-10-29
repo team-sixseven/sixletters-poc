@@ -38,6 +38,22 @@ def write_yaml(path, value):
     path.write_text(yaml.safe_dump(value), encoding="utf-8")
 
 
+def test_drive_relative_config_paths(tmp_path):
+    config = {
+        "drive_root": str(tmp_path / "drive"),
+        "data": {"clinical": {"path": "drive://clincal/clinical_clean.csv"}},
+    }
+    path = tmp_path / "basic.yaml"
+    write_yaml(path, config)
+    assert load_basic_config(path)["data"]["clinical"]["path"] == str(
+        tmp_path / "drive/clincal/clinical_clean.csv"
+    )
+    config["data"]["clinical"]["path"] = "drive://../outside.csv"
+    write_yaml(path, config)
+    with pytest.raises(ValueError, match="Invalid drive-relative path"):
+        load_basic_config(path)
+
+
 @pytest.fixture
 def raw_setup(tmp_path):
     wave = tmp_path / "wave"
@@ -59,6 +75,8 @@ def raw_setup(tmp_path):
         segment_seconds=3,
         source_metadata_confirmed=True,
         quality_index_path=str(tmp_path / "quality.csv"),
+        quality_index_format="standard",
+        lead_metadata_path=None,
         normalization="none",
     )
     basic_path = tmp_path / "basic.yaml"
@@ -131,6 +149,50 @@ def test_quality_and_source_gates(raw_setup):
     assert any(r["reason"] == "no_usable_30_second_segments" for r in audit["exclusions"])
     quality.iloc[:-1].to_csv(root / "quality.csv", index=False)
     with pytest.raises(ValueError, match="one quality row"):
+        load_raw_cohort(basic, basic_path)
+
+
+def test_drive_quality_and_missing_z_are_applied(raw_setup):
+    root, basic, basic_path, _, _ = raw_setup
+    split = pd.read_csv(root / "split.csv", dtype={"pid": str})
+    for pid in split.pid:
+        path = root / "wave" / f"{pid}.npy"
+        signal = np.load(path)
+        if signal.shape[1] == 2:
+            signal = np.pad(signal, ((0, 0), (0, 1)))
+            np.save(path, signal)
+    pd.DataFrame({"file": split.pid + ".npy", "has_z": split.pid != "0000"}).to_csv(
+        root / "leads.csv", index=False
+    )
+    quality = pd.read_csv(root / "quality.csv", dtype={"pid": str})
+    drive = pd.DataFrame(
+        {
+            "pid": quality.pid,
+            "file": quality.pid + ".npy",
+            "window_idx": quality.window_index,
+            "start_idx": quality.window_index * 60,
+            "exclude": quality.usable == 0,
+        }
+    )
+    drive.to_csv(root / "drive_quality.csv", index=False)
+    basic["data"]["raw_ecg"].update(
+        quality_index_format="drive_segment_rpeaks",
+        quality_index_path=str(root / "drive_quality.csv"),
+        lead_metadata_path=str(root / "leads.csv"),
+    )
+    cohorts, indices, _ = load_raw_cohort(basic, basic_path)
+    dataset = RawPatientSequenceDataset(
+        cohorts["train"], indices, basic["data"]["raw_ecg"], 3, "none"
+    )
+    assert dataset[0][-1].tolist() == [True, True, False]
+    assert dataset[0][3].tolist() == [0, 2, 3]
+    drive.loc[0, "start_idx"] = 1
+    drive.to_csv(root / "drive_quality.csv", index=False)
+    with pytest.raises(ValueError, match="alignment"):
+        load_raw_cohort(basic, basic_path)
+    split.loc[len(split)] = {"pid": "0000-1", "split": "test", "SCD": 0}
+    split.to_csv(root / "split.csv", index=False)
+    with pytest.raises(ValueError, match="patient split or label"):
         load_raw_cohort(basic, basic_path)
 
 

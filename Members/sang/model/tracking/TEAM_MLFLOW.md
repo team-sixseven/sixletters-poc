@@ -1,6 +1,6 @@
 # 팀원별 MLflow 사용
 
-ML·DL 학습과 최종 평가는 각자의 학습 PC에서 실행하고, 로컬에 설정한 개인 계정으로 공용 `sang-scd-ml` 실험에 기록합니다. ML Optuna는 완료된 study의 best 하나만 기록합니다. 각 PC에서 개인 계정을 한 번 설정합니다. 브라우저에 로그인한 계정이 아니라 Python 실행 환경의 접속 설정으로 업로드합니다.
+ML·DL 학습과 최종 평가는 각자의 학습 PC에서 실행하고, 로컬에 설정한 개인 계정으로 본인 experiment에 기록합니다. experiment 이름은 `<owner>-scd-ml`처럼 팀원마다 고유하게 정합니다. ML Optuna는 완료된 study의 best 하나만 기록합니다. 각 PC에서 개인 계정을 한 번 설정합니다. 브라우저에 로그인한 계정이 아니라 Python 실행 환경의 접속 설정으로 업로드합니다.
 
 ## 1. 접속 주소 선택
 
@@ -42,18 +42,18 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 서버 관리자로부터 **자기 계정의 비밀번호만** 전달받습니다. 전체 계정 JSON이나 서버 관리자 비밀번호를 팀원에게 배포하지 않습니다.
 
-각 PC에서 저장소 루트로 이동한 뒤 기존 프로젝트 실행 환경을 사용합니다. 다음은 은아가 Wi-Fi에서 설정하는 예시이며 `owner`, `username`, `uri`를 본인에게 맞게 바꿉니다. 비밀번호는 명령 인자에 적지 않고 프롬프트에 입력합니다.
+각 PC에서 저장소 루트로 이동한 뒤 기존 프로젝트 실행 환경을 사용합니다. 다음은 은아가 Wi-Fi에서 설정하는 예시이며 `owner`, `username`, `uri`, `experiment`를 본인에게 맞게 바꿉니다. 비밀번호는 명령 인자에 적지 않고 프롬프트에 입력합니다. 사용할 experiment는 MLflow UI에서 미리 생성합니다.
 
 ```bash
 cd ~/sixletters-poc
-./dev setup --owner euna --username euna --uri http://192.168.10.88:5000 --experiment sang-scd-ml --password
+./dev setup --owner euna --username euna --uri http://192.168.10.88:5000 --experiment euna-scd-ml --password
 ```
 
 Docker 없이 이미 준비된 `Global/.venv` Python으로 ML 노트북을 사용하는 경우에는 같은 설정을 아래 명령으로 할 수 있습니다. 두 가지 중 자신의 실행 환경에 맞는 하나만 사용합니다.
 
 ```bash
 cd ~/sixletters-poc
-Global/.venv/bin/python -m sixletters setup --owner euna --username euna --uri http://192.168.10.88:5000 --experiment sang-scd-ml --password
+Global/.venv/bin/python -m sixletters setup --owner euna --username euna --uri http://192.168.10.88:5000 --experiment euna-scd-ml --password
 ```
 
 `.poc.local.toml`은 PC마다 독립적이며 Git에서 제외됩니다. `MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_USERNAME`, `MLFLOW_TRACKING_PASSWORD`, `MLFLOW_EXPERIMENT_NAME` 환경 변수가 비어 있지 않으면 파일보다 우선합니다. 다른 사람의 계정으로 업로드되면 환경 변수와 실제 노트북 커널을 확인하세요. 다른 사람의 `.poc.local.toml`을 복사하지 않습니다.
@@ -68,7 +68,7 @@ from Members.sang.model.tracking.check_connection import check_mlflow_connection
 check_mlflow_connection()
 ```
 
-이 검사는 개인 계정 인증과 공용 실험 조회를 확인합니다. 읽기 검사가 성공했다고 모델 업로드 권한·용량까지 검증한 것은 아닙니다. 처음 사용할 때 완료된 실험 한 개의 업로드까지 확인하세요.
+이 검사는 개인 계정 인증과 설정한 개인 experiment 조회를 확인합니다. experiment 생성 권한이 없거나 UI에서 생성할 수 없다면 서버 관리자에게 생성을 요청합니다. 읽기 검사가 성공했다고 모델 업로드 권한·용량까지 검증한 것은 아닙니다. 처음 사용할 때 완료된 실험 한 개의 업로드까지 확인하세요.
 
 ML 일반 학습·Optuna와 DL 학습 모두 같은 검사를 호출합니다. `mlflow_logging=True`이면 학습을 시작하기 전에 연결을 확인하며, 실패하면 먼저 주소·계정을 고칩니다. 오프라인 학습에는 `mlflow_logging=False`를 사용합니다.
 

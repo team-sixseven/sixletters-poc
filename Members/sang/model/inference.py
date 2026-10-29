@@ -11,6 +11,7 @@ import pandas as pd
 import torch
 import yaml
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 from .data import load_cohorts
 from .DL.composed import MODEL_FORMAT_VERSION, build_composed_model_from_specs
@@ -78,7 +79,9 @@ def predict_dl_run(
         collate_fn=collate_patient_windows,
     )
     probabilities, predicted_ids = [], []
-    for patient_ids, waveforms, _, mask, positions, lead_presence in loader:
+    for patient_ids, waveforms, _, mask, positions, lead_presence in tqdm(
+        loader, desc="DL inference", unit="batch", leave=False
+    ):
         logits = model(
             waveforms.to(device),
             mask.to(device),
