@@ -251,11 +251,11 @@ Global/.venv/bin/python -m pytest Members/sang/model/DL/tests/test_pipeline.py -
 
 CNN은 기존 구현을 모델별 `CNN/resnet.py`, `inception_time.py`, `TCN.py`로 분리해 재사용합니다. 시간 특징 구현도 `LSTM/Attention_LSTM_FCN.py`, `BiLSTM.py`, `Transformer/transformer_enc.py`에서 관리하며 공통 조립·MIL은 `composed.py`에 있습니다. Padding을 CNN/BatchNorm에서 제외하도록 조립 경로를 수정했습니다. Packed LSTM, Transformer key-padding mask, masked MIL, measured-lead 표시와 gap 입력을 추가했습니다. Attention LSTM FCN은 CNN 구간 벡터에 packed LSTM과 masked temporal FCN을 병렬 적용하고 구간별 특징을 결합한 뒤 환자 MIL을 적용하는 변형입니다. FCN은 위치별 LayerNorm을 사용하고 각 convolution 뒤 시간 padding을 지워 패딩 통계/값이 유효 구간에 영향을 주지 않게 합니다. 독립 segment 분류를 수행하지 않습니다. Raw loader는 기존 10초 SQI source의 format·mask를 재사용하면 정렬을 보장할 수 없어 별도로 구현했습니다.
 
-DL 학습의 양성 클래스 가중치는 `basic.yaml:dl.positive_class_weight`에서 설정합니다. 기본값은 실제 학습 환자의 음성 수 / 양성 수이며, `none`을 지정하면 보정하지 않습니다. Raw와 legacy DL에 적용되며 ML에는 적용되지 않습니다.
-
 ## 기존 SQI-window 경로
 
-기존 `basic.yaml:data.ecg`의 10초 window source가 필요한 경우 별도로 실행합니다.
+DL 학습의 양성 클래스 가중치는 `basic.yaml:dl.positive_class_weight`에서 설정합니다. 기본값은 실제 학습 환자의 음성 수 / 양성 수이며, `none`을 지정하면 보정하지 않습니다. Raw와 legacy DL에 적용되며 ML에는 적용되지 않습니다.
+
+기존 10초 window source를 쓰는 legacy trainer는 shared `basic.yaml`에 없는 별도 `data.ecg` 설정과 해당 NPY/sidecar가 필요합니다. 현재 shared 설정은 raw ECG 경로만 제공합니다.
 
 ```bash
 Global/.venv/bin/python -m Members.sang.model.DL.training \

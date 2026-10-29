@@ -269,30 +269,34 @@ def load_cohorts(
     """Build ML, DL, and fusion cohort frames without inventing split or label data."""
     clinical, column_mapping = _read_clinical(basic, basic_path)
     split = _read_splits(basic, basic_path)
-    ecg_files, _ = _ecg_inventory(basic, basic_path)
-    window_counts, invalid_ecg = _validate_ecg_headers(ecg_files, basic)
     clinical_split_ids = set(clinical[basic["data"]["clinical"]["id_column"]].astype(str)) & set(
         split.patient_id
     )
-    window_indices, indexed_window_counts = _load_window_quality_index(
-        basic, basic_path, clinical_split_ids & set(window_counts)
-    )
-    for patient_id in window_indices:
-        if indexed_window_counts[patient_id] != window_counts[patient_id]:
-            invalid_ecg[patient_id] = (
-                f"NPY windows={window_counts[patient_id]} but metadata rows="
-                f"{indexed_window_counts[patient_id]}"
-            )
-        elif patient_id not in invalid_ecg:
-            try:
-                load_patient_waveform(
-                    patient_id,
-                    ecg_files[patient_id],
-                    window_indices[patient_id],
-                    basic["data"]["ecg"],
+    ecg_config = basic["data"].get("ecg", {})
+    if ecg_config.get("directory"):
+        ecg_files, _ = _ecg_inventory(basic, basic_path)
+        window_counts, invalid_ecg = _validate_ecg_headers(ecg_files, basic)
+        window_indices, indexed_window_counts = _load_window_quality_index(
+            basic, basic_path, clinical_split_ids & set(window_counts)
+        )
+        for patient_id in window_indices:
+            if indexed_window_counts[patient_id] != window_counts[patient_id]:
+                invalid_ecg[patient_id] = (
+                    f"NPY windows={window_counts[patient_id]} but metadata rows="
+                    f"{indexed_window_counts[patient_id]}"
                 )
-            except (OSError, ValueError) as error:
-                invalid_ecg[patient_id] = f"selected_windows_invalid: {error}"
+            elif patient_id not in invalid_ecg:
+                try:
+                    load_patient_waveform(
+                        patient_id,
+                        ecg_files[patient_id],
+                        window_indices[patient_id],
+                        ecg_config,
+                    )
+                except (OSError, ValueError) as error:
+                    invalid_ecg[patient_id] = f"selected_windows_invalid: {error}"
+    else:
+        ecg_files, window_counts, invalid_ecg, window_indices = {}, {}, {}, {}
     valid_ecg_ids = {
         patient_id
         for patient_id in window_indices
@@ -340,14 +344,17 @@ def load_cohorts(
     for patient_id, reason in sorted(invalid_ecg.items()):
         if patient_id in clinical_ids & split_ids:
             exclusions.append({"patient_id": patient_id, "reason": f"invalid_ecg: {reason}"})
-    for patient_id in sorted(clinical_split_ids - valid_ecg_ids - set(invalid_ecg)):
-        exclusions.append({"patient_id": patient_id, "reason": "missing_ecg_file"})
+    if ecg_config.get("directory"):
+        for patient_id in sorted(clinical_split_ids - valid_ecg_ids - set(invalid_ecg)):
+            exclusions.append({"patient_id": patient_id, "reason": "missing_ecg_file"})
+    source_paths = {
+        "clinical": str(resolve_data_path(basic["data"]["clinical"]["path"], basic_path)),
+        "split": str(resolve_data_path(basic["data"]["split"]["path"], basic_path)),
+    }
+    if ecg_config.get("directory"):
+        source_paths["ecg_directory"] = str(resolve_data_path(ecg_config["directory"], basic_path))
     audit = {
-        "source_paths": {
-            "clinical": str(resolve_data_path(basic["data"]["clinical"]["path"], basic_path)),
-            "split": str(resolve_data_path(basic["data"]["split"]["path"], basic_path)),
-            "ecg_directory": str(resolve_data_path(basic["data"]["ecg"]["directory"], basic_path)),
-        },
+        "source_paths": source_paths,
         "counts": {
             "clinical_patients": len(clinical_ids),
             "split_patients": len(split_ids),
@@ -374,11 +381,15 @@ def load_cohorts(
         "invalid_ecg": invalid_ecg,
         "exclusions": exclusions,
         "label_policy": basic["data"]["clinical"].get("target_semantics"),
-        "ecg_policy": {
-            "quality_filter": basic["data"]["ecg"]["quality_filter"],
-            "window_selection": basic["data"]["ecg"]["window_selection"],
-            "normalization": basic["data"]["ecg"]["normalization"],
-        },
+        "ecg_policy": (
+            {
+                "quality_filter": ecg_config["quality_filter"],
+                "window_selection": ecg_config["window_selection"],
+                "normalization": ecg_config["normalization"],
+            }
+            if ecg_config.get("directory")
+            else None
+        ),
     }
     for split_name in ("train", "validation", "test"):
         ml_frame, dl_frame = ml[split_name], dl[split_name]

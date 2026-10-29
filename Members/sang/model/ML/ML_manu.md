@@ -107,7 +107,7 @@ data:
 Global/.venv/bin/python Members/sang/scripts/audit_model_data.py
 ```
 
-출력된 ML train/validation/test 환자 수와 label 분포, 제외 사유를 확인합니다. 공통 감사/로더는 기존 ECG 경로도 검사하므로 `data.ecg.directory` 관련 오류가 나면 [basic.yaml](../basic.yaml)의 해당 경로와 데이터 배치도 확인합니다. 감사 명령은 모델을 학습하거나 MLflow로 전송하지 않습니다.
+출력된 ML train/validation/test 환자 수와 label 분포, 제외 사유를 확인합니다. 임상 ML 감사와 학습은 ECG 파일을 읽지 않습니다. 감사 명령은 모델을 학습하거나 MLflow로 전송하지 않습니다.
 
 상대 경로는 해당 YAML 위치 기준입니다. `basic.yaml`의 임상 경로는 `model/` 기준이고, 모델 `parameter.yaml`의 상대 경로는 각 알고리즘 디렉터리 기준입니다.
 

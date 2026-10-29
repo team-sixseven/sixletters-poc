@@ -377,7 +377,11 @@ def train_clinical(
                 for name, section in basic["data"].items()
                 if name in {"clinical", "split"}
             },
-            "ecg_directory": str(resolve_data_path(basic["data"]["ecg"]["directory"], basic_path)),
+            "ecg_directory": (
+                str(resolve_data_path(basic["data"]["ecg"]["directory"], basic_path))
+                if basic["data"].get("ecg", {}).get("directory")
+                else None
+            ),
             "selected_model": model_name,
             "model_version": model_version,
             "parameter_file": str(parameter_path),

@@ -113,7 +113,7 @@ Optuna의 `ML/models/best/...`는 후속 학습에서 교체될 수 있습니다
 
 - ML: `ML/data/clinical_clean.csv`, `ML/data/final_split.csv`.
 - 현재 raw DL: `DL/data/final_split_v2_augmented.csv`, `DL/data/wave/`의 환자별 NPY, 실제 전처리에서 만든 품질 인덱스.
-- 기존 SQI-window DL 모델: `basic.yaml`의 `data.ecg` 경로에 해당 모델용 ECG와 sidecar가 필요합니다.
+- 기존 SQI-window DL 모델: 별도 `data.ecg` 설정에 해당 모델용 ECG와 sidecar가 필요합니다. 이 legacy 경로는 shared `basic.yaml`에 포함하지 않습니다.
 
 환자 ID가 양쪽에 있으면 split과 SCD 라벨이 같아야 합니다. 두 모델의 양성 클래스, target column, target semantics도 일치해야 합니다. Fusion은 환자 ID로 예측을 맞추며 **양쪽 예측이 모두 있는 환자만 평가**합니다. 한쪽만 있는 환자는 `excluded_patients.csv`와 감사 자료로 보고하고, 누락 확률을 0으로 채우지 않습니다.
 

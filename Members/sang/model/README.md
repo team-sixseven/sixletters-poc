@@ -4,7 +4,7 @@ This directory provides one configuration-driven workflow for clinical ML, Holte
 
 ```text
 model/
-├── basic.yaml                         # shared data paths, ID/label schema, features, ECG policy
+├── basic.yaml                         # shared clinical and raw ECG paths, ID/label schema
 ├── fusion.yaml                        # selected saved ML/DL runs, weights, threshold
 ├── ECG+clinical_experiment.ipynb      # saved-model fusion only; does not train base models
 ├── config.py                          # YAML-relative path resolution
@@ -57,16 +57,15 @@ The legacy SQI source described below is separate from raw 30-second waveforms. 
 
 - Clinical: connected Drive `DATA/clincal/clinical_clean.csv`
 - Split: connected Drive `DATA/final_split.csv` (`val` maps to the internal `validation` split)
-- ECG: `../datas/Holter/windows/{pid}.npy`
-- ECG window metadata: `../datas/Holter/index/windows.csv.gz` (used to align array rows, timestamps, and `sqi_pass`)
+- Raw ECG: configured separately under `data.raw_ecg`; clinical ML does not need ECG files.
 
 The current `final_split.csv` contains 508 unique patient IDs: 325 train, 81 validation (`val` in the CSV), and 102 test. All 508 IDs match the clinical CSV and their split-file SCD labels agree with the clinical SCD labels. Older ECG cohort counts below this section were produced with a previous split and should be refreshed by rerunning the data audit before relying on modality-specific DL/fusion counts.
 
-The audit writes exact modality patient lists and exclusion reasons. ML uses clinical∩split. DL uses clinical∩split∩valid ECG. Fusion uses the intersection of ML and DL predictions. No patient is moved to a new split. Duplicate IDs, conflicting labels, malformed split values, missing configured features, array shape/dtype errors, and invalid selected windows fail clearly. NPY arrays are memory-mapped; only the deterministically selected segments are read per patient per batch.
+The audit writes exact modality patient lists and exclusion reasons. ML uses clinical∩split. Raw DL uses its configured raw ECG cohort. Legacy window-based DL and fusion can opt into a separate `data.ecg` configuration; it is intentionally absent from the shared default because that source is not required for current clinical ML or raw ECG training. No patient is moved to a new split. Duplicate IDs, conflicting labels, malformed split values, missing configured features, array shape/dtype errors, and invalid selected windows fail clearly. NPY arrays are memory-mapped; only the deterministically selected segments are read per patient per batch.
 
 ## ECG sequence and preprocessing
 
-The sidecar has `pid`, `row`, `win_idx`, `start_sec`, and per-window SQI fields. For the matched cohort, array lengths are checked against sidecar row counts and rows are validated in chronological order without overlap. The inspected records (including P1030) have 10-second `start_sec` intervals; other matched records are checked for chronological non-overlap but are not asserted to have an exact 10-second interval. The source MUSIC Holter recording is documented at 200 Hz, while NPY files themselves carry no sampling-rate metadata. See the [MUSIC source paper](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0186152).
+The legacy window-source sidecar has `pid`, `row`, `win_idx`, `start_sec`, and per-window SQI fields. It is only needed when explicitly using the old window-based trainer or compatible saved models. The current raw ECG workflow uses the separate `data.raw_ecg` configuration.
 
 The chosen model sequence is **shared per-lead CNN → measured-lead mean per segment → LSTM or Transformer → masked MIL → MLP**. It does not flatten the whole NPY. `sqi_pass=1` windows are selected up to `training.yaml:max_segments_per_patient` evenly through the recording and kept in chronological order. The dataloader converts to float32 and applies per-window, per-lead z-score normalization. The upstream filtering/normalization history of the NPY values is not recorded in this repository; the local dataloader normalization is explicit in the shared defaults in `config.py`.
 

@@ -6,10 +6,6 @@ data:
     label_column: SCD
   split:
     path: drive://final_split.csv
-  ecg:
-    directory: ../datas/Holter/windows
-    metadata_path: ../datas/Holter/index/windows.csv.gz
-    sample_rate_hz: 200
   raw_ecg:
     split_path: drive://ECG_tem/final_split_augmented.csv
     wave_directory: drive://ECG_tem/ECG_tem_clean/clean_signal
