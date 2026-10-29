@@ -228,7 +228,7 @@ def train_raw_ecg(
 
     positives = float(train_frame.y_true.sum())
     negatives = float(len(train_frame) - positives)
-    weight_mode = training["positive_class_weight"]
+    weight_mode = basic["dl"]["positive_class_weight"]
     if weight_mode == "train_negatives_divided_by_train_positives":
         positive_weight = negatives / positives
     elif weight_mode == "none":

@@ -159,6 +159,7 @@ evaluation:
 ## YAML and artifacts
 
 - Edit data paths, clinical ID/label columns and verified sample rate in `basic.yaml`; actual array dimensions are inspected at runtime and segment cap is in `DL/training.yaml`. Categorical columns, fixed data conventions, and audit paths default in `config.py`; optional YAML overrides are supported.
+- `basic.yaml:dl.positive_class_weight` controls DL loss weighting: `train_negatives_divided_by_train_positives` uses the actual training cohort, and `none` disables weighting. It does not change ML training.
 - Select XGBoost, CatBoost, and/or Random Forest in `ML/model_choice.yaml`. Change each model's hyperparameters and `classification.threshold` in its `parameter.yaml`. Clinical features are required to be complete; ML does not impute missing values. XGBoost and Random Forest apply train-fitted scaling/one-hot encoding, while Random Forest has no early stopping and records validation AP for comparison.
 - Model parameter YAMLs include `model_path`. Standard ML execution reuses an existing complete run or trains from YAML when absent. Optuna trains temporary trials, retains one winner per algorithm/version under `models/best/`, and records its path after successful study completion. ML evaluation can use `model_name` with `artifact_dir: null` to read that path without retraining.
 - ML별 `model`, `training`, `classification` parameter key의 역할은 [`ML/ML_manu.md`](ML/ML_manu.md)에 정리했습니다.

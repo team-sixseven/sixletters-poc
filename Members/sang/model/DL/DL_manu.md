@@ -118,6 +118,8 @@ model/
 
 ### 3-2. `basic.yaml`의 경로 확인
 
+DL 클래스 불균형 보정은 `basic.yaml`의 `dl.positive_class_weight`에서 설정합니다. 기본값 `train_negatives_divided_by_train_positives`는 실제 학습 환자의 음성 수를 양성 수로 나눈 값을 BCE 양성 가중치로 사용하며, `none`은 가중치를 적용하지 않습니다. ML에는 적용되지 않습니다.
+
 [basic.yaml](../basic.yaml)의 관련 항목입니다. **기존 파일 전체를 아래 발췌로 덮어쓰지 말고 해당 값만 수정**합니다.
 
 ```yaml
@@ -241,7 +243,6 @@ batch_size: 1
 learning_rate: 0.001
 optimizer: Adam
 weight_decay: 0.0001
-positive_class_weight: train_negatives_divided_by_train_positives
 early_stopping:
   patience: 5
   min_delta: 0.0001

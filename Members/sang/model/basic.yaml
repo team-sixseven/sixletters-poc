@@ -21,5 +21,7 @@ data:
     quality_index_format: drive_segment_rpeaks
     lead_metadata_path: drive://ECG_tem/ECG_tem_clean.csv
     target_semantics: SCD within four years after Holter recording, as described in Drive ECG_tem README
+dl:
+  positive_class_weight: train_negatives_divided_by_train_positives
 outputs:
   dl_model_directory: DL/models

@@ -46,6 +46,7 @@ _BASIC_DEFAULTS = {
             "quality_filter": "sqi_pass_only",
         },
     },
+    "dl": {"positive_class_weight": "train_negatives_divided_by_train_positives"},
     "outputs": {"audit_directory": "reports/data_audit"},
 }
 
